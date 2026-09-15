@@ -26,22 +26,22 @@ timing 按 r[t] 的符号分成两类：
 
 from __future__ import annotations
 
+import argparse
 import math
 import sys
 from dataclasses import dataclass, field
-from datetime import date, timedelta
+from datetime import date
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from libre_quant.data.quotes import Bar, fetch_daily  # noqa: E402
+from libre_quant.data.quotes import fetch_daily_all as fetch_all  # noqa: E402
+from libre_quant.universe import UNIVERSE  # noqa: E402
 from scripts.backtest import (  # noqa: E402
     COST_PER_SIDE,
-    END,
-    ETF,
-    START,
-    fetch_all,
+    build_parser,
+    resolve_span,
     sig_donchian,
     sig_ma_filter_trend,
     sig_trend_vol,
@@ -262,12 +262,17 @@ def report(name: str, att: Attribution, top: int = 4) -> None:
         print(f"    {s.start} ~ {s.end}  空仓 {s.days:>3} 日  市场跌 {pct(s.move):>8}")
 
 
-def main() -> int:
+def main(argv=None) -> int:
+    args = build_parser().parse_args(argv)
+    etf, start, end = resolve_span(args)
+    asset = UNIVERSE[etf]
+
     print("=" * 88)
-    print(f"收益归因：{ETF}   {START} ~ {END}   成本={COST_PER_SIDE:.2%}/边")
+    print(f"收益归因：{asset.code} {asset.name}   {start} ~ {end}   "
+          f"成本={COST_PER_SIDE:.2%}/边")
     print("=" * 88)
     print("\n抓取历史 ...")
-    bars = fetch_all(ETF, START, END)
+    bars = fetch_all(etf, start, end)
     print(f"  {len(bars)} 根  {bars[0].day} ~ {bars[-1].day}")
 
     for name, sig in TARGETS:

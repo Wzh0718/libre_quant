@@ -1,4 +1,4 @@
-"""策略回测：515880 通信ETF，可回测的几种方案横向对比。
+"""策略回测：A 股上市 ETF 横向对比（默认 515880）。
 
 诚实性设计
 ----------
@@ -7,15 +7,19 @@
 2. **必含买入持有基准** —— 不跟基准比，收益率毫无意义。
 3. **计入交易成本** —— ETF 无印花税，但佣金+滑点按单边 0.05% 计（保守）。
 4. **分年度呈现** —— 单一总收益会掩盖"只在某一年赚钱"的真相。
-5. **明确样本局限** —— 单标的、~1700 根日线、且 2025 年是主题主升浪。
+5. **明确样本局限** —— 单标的日线、且 2025 年（515880）是主题主升浪。
 
 用法::
 
-    uv run python scripts/backtest.py
+    uv run python scripts/backtest.py                     # 默认 515880，起始=上市
+    uv run python scripts/backtest.py --etf 513100
+    uv run python scripts/backtest.py --etf 515880 \\
+        --start 2019-09-01 --end 2026-09-11               # 与 docs/04 精确回归
 """
 
 from __future__ import annotations
 
+import argparse
 import sys
 from dataclasses import dataclass
 from datetime import date
@@ -24,10 +28,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from libre_quant.data.quotes import Bar, fetch_daily_all as fetch_all  # noqa: E402
-
-ETF = "515880"
-START = date(2019, 9, 1)
-END = date(2026, 9, 11)
+from libre_quant.universe import UNIVERSE, onshore_etfs  # noqa: E402
 
 COST_PER_SIDE = 0.0005   # 单边成本：佣金+滑点
 TRADING_DAYS = 252
@@ -195,13 +196,39 @@ def yearly(closes: list[float], days: list[date]) -> dict[int, float]:
     return out
 
 
-def main() -> int:
+def build_parser() -> argparse.ArgumentParser:
+    """backtest 与 attribution 共用的命令行口径。"""
+    ap = argparse.ArgumentParser(add_help=False)
+    ap.add_argument("--etf", default="515880", choices=sorted(
+        a.code for a in onshore_etfs()),
+        help="A 股上市 ETF 代码（universe 内）")
+    ap.add_argument("--start", type=date.fromisoformat, default=None,
+                    help="起始日（默认取 universe 的 data_from）")
+    ap.add_argument("--end", type=date.fromisoformat, default=None,
+                    help="截止日（默认今天）")
+    return ap
+
+
+def resolve_span(args) -> tuple[str, date, date]:
+    """按 universe 解析 (code, start, end)。"""
+    asset = UNIVERSE[args.etf]
+    start = args.start or asset.data_from
+    end = args.end or date.today()
+    return asset.code, start, end
+
+
+def main(argv=None) -> int:
+    args = build_parser().parse_args(argv)
+    etf, start, end = resolve_span(args)
+    asset = UNIVERSE[etf]
+
     print("=" * 92)
-    print(f"515880 通信ETF 策略回测   {START} ~ {END}   成本={COST_PER_SIDE:.2%}/边")
+    print(f"{asset.code} {asset.name} 策略回测   {start} ~ {end}   "
+          f"成本={COST_PER_SIDE:.2%}/边")
     print("=" * 92)
 
     print("\n[1] 抓取历史（腾讯接口分页）...")
-    bars = fetch_all(ETF, START, END)
+    bars = fetch_all(etf, start, end)
     days = [b.day for b in bars]
     closes = [b.close for b in bars]
     print(f"    {len(bars)} 根  {days[0]} ~ {days[-1]}")
@@ -258,11 +285,12 @@ def main() -> int:
     print("\n" + "=" * 92)
     print("解读要点")
     print("=" * 92)
-    print("  · 任何策略都必须先跟『买入持有』比 —— 跑不赢基准就没有存在意义")
-    print("  · 真正的区分度在『最大回撤』：2022 年 -27%，能否避开是关键")
+    print(f"  · 任何策略都必须先跟『买入持有』比 —— 跑不赢基准就没有存在意义")
+    print("  · 真正的区分度在『最大回撤』：能否避开基准的深回撤是关键")
     print("  · 夏普/卡玛比总收益更可信，因为它同时惩罚了波动和回撤")
-    print("  · ⚠️ 单标的 + ~1700 根日线 + 2025 年主题主升浪 → 参数极易过拟合，")
+    print(f"  · ⚠️ 单标的（{asset.code}，{len(bars)} 根日线）→ 参数极易过拟合，")
     print("    参数接近的策略表现接近才是正常的，孤立的『最优参数』不可信")
+    print("    （QDII 另见 docs/06：溢价 >2% 禁买是叠加在择时之上的硬规则）")
     return 0
 
 
