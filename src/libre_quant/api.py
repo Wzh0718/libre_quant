@@ -576,6 +576,42 @@ def create_app(*, with_scheduler: bool = False) -> FastAPI:
         finally:
             conn.close()
 
+    @app.get("/api/levels")
+    def levels(code: str = "159941") -> dict:
+        """数据算出的买/卖参考价位（波动带/均线/回撤分布/溢价等价价）。
+
+        **不是预测**：是统计参考位 + 历史触及频率；实测价格触发方案跑输定投
+        （docs/15），此接口用于给"现在贵不贵"提供刻度，而非挂单指令。
+        """
+        from libre_quant import store
+        from libre_quant.accounts import (
+            DEFAULT_BUY_LEVELS, DEFAULT_SELL_LEVELS, price_levels,
+        )
+        from libre_quant.accounts import price_levels as _pl  # noqa: F401
+
+        conn = store.connect()
+        try:
+            days, raw, adj, src = store.load_series(conn, code)
+            if not days:
+                return {"code": code, "empty": True,
+                        "note": "库中无数据，请先检索入库"}
+            prem = store.load_premiums(conn, code)
+            lv = price_levels(days, adj, prem=prem or None)
+            # 阶梯档位的具体价格（以最新价为基准）
+            lv["ladder"] = {
+                "buy": [{"offset": off, "mult": mult,
+                         "price": round(lv["last"] * (1 + off), 4)}
+                        for off, mult in DEFAULT_BUY_LEVELS],
+                "sell": [{"offset": off, "frac": frac,
+                          "price": round(lv["last"] * (1 + off), 4)}
+                         for off, frac in DEFAULT_SELL_LEVELS],
+            }
+            lv.update({"code": code, "name": _name_of(code),
+                       "as_of": str(days[-1])})
+            return lv
+        finally:
+            conn.close()
+
     @app.get("/api/health")
     def health() -> dict:
         return {"ok": True}

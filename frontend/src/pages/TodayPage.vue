@@ -1,13 +1,14 @@
 <script setup lang="ts">
 import { onMounted, ref, watch } from "vue";
 import {
-  fetchLive, fetchToday, fmtPct, fmtYuan,
-  type LiveData, type TodayCard,
+  fetchLevels, fetchLive, fetchToday, fmtPct, fmtYuan,
+  type LevelsData, type LiveData, type TodayCard,
 } from "../api";
 import { selectedCode } from "../store";
 
 const data = ref<TodayCard | null>(null);
 const live = ref<LiveData | null>(null);
+const levels = ref<LevelsData | null>(null);
 const liveErr = ref<string | null>(null);
 const error = ref<string | null>(null);
 const loading = ref(true);
@@ -26,6 +27,7 @@ async function load() {
   error.value = null;
   try {
     data.value = await fetchToday(selectedCode.value);
+    levels.value = await fetchLevels(selectedCode.value).catch(() => null);
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e);
   } finally {
@@ -78,6 +80,51 @@ watch(selectedCode, load);
       <div class="muted" style="margin-top:8px;font-size:12px">
         {{ live?.note ?? "盘中实时（收盘前参考；日终以入库收盘价为准）" }}
       </div>
+    </div>
+
+    <h2>价格参考位（数据算出，非预测）</h2>
+    <div class="card">
+      <template v-if="levels && !levels.empty">
+        <div class="muted" style="font-size:12px">
+          最新价 <span class="num">{{ levels.last.toFixed(3) }}</span> ·
+          年化波动 {{ fmtPct(levels.vol_ann, 1, false) }}
+          <template v-if="levels.premium_now != null">
+            · 当前溢价 {{ fmtPct(levels.premium_now) }}
+            <template v-if="levels.price_if_premium_2pct">
+              → 溢价回到 2% 的等价价
+              <span class="num">{{ levels.price_if_premium_2pct.toFixed(3) }}</span>
+              （{{ fmtPct(levels.price_if_premium_2pct / levels.last - 1) }}，无需美股下跌）
+            </template>
+          </template>
+        </div>
+        <div class="grid cards" style="margin-top:12px">
+          <div><div class="muted">±1σ 区间（1 / 3 / 5 日）</div>
+            <div class="num" v-for="(b, h) in levels.bands" :key="h">
+              {{ h }}日：{{ b[0].toFixed(3) }} ~ {{ b[1].toFixed(3) }}</div></div>
+          <div><div class="muted">均线（MA20 / 60 / 120）</div>
+            <div class="num" v-for="(v, n) in levels.ma" :key="n">
+              MA{{ n }}：{{ v != null ? v.toFixed(3) : "—" }}</div></div>
+          <div><div class="muted">近一年回撤触及（从滚动高点）</div>
+            <div class="num" v-for="(d, k) in levels.drawdown" :key="k">
+              {{ k }}：{{ d.days }} 天（{{ fmtPct(d.share, 0, false) }}）→ {{ d.price.toFixed(3) }}</div></div>
+        </div>
+        <div class="muted" style="margin-top:12px;font-size:12px">
+          阶梯档位（相对最新价）：
+          买入
+          <span v-for="b in levels.ladder.buy" :key="b.offset" class="num">
+            {{ fmtPct(b.offset, 0) }}→{{ b.price.toFixed(3) }} </span>
+          · 卖出
+          <span v-for="sv in levels.ladder.sell" :key="sv.offset" class="num">
+            {{ fmtPct(sv.offset, 0) }}→{{ sv.price.toFixed(3) }} </span>
+        </div>
+        <div style="margin-top:8px;font-size:12px;color:var(--amber)">
+          ⚠️ 实测提醒：把买卖做成价格触发（阶梯/网格/回撤加码）在本标的上
+          **全部跑输纯定投**（docs/15：纯阶梯 XIRR +2.21%，加码混合盘 18.6~19.7%，
+          纯定投 19.77%），每降 1.9pp 回撤要付 1.14pp 年化。价位适合当"贵不贵"的刻度，
+          不适合当挂单指令。
+        </div>
+      </template>
+      <div v-else class="muted">{{ levels?.note ?? "暂无价位数据" }}</div>
     </div>
 
     <h2>决策推理链（每天投递的思路）</h2>

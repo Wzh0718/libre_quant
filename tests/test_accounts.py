@@ -20,7 +20,7 @@ def _days(n=100, start=date(2025, 1, 2)):
 
 
 def test_plan_registry_and_defaults():
-    assert set(PLANS) == {"naive", "gate", "deep_value", "monthly"}
+    assert set(PLANS) == {"naive", "gate", "deep_value", "monthly", "ladder"}
     assert plan_defaults("gate")["gate"] == 0.05
     assert plan_defaults("naive")["daily"] == 200.0
 
@@ -87,3 +87,32 @@ def test_realized_vol_positive():
     prices = [1.0 * (1.001 ** i) for i in range(80)]
     v = realized_vol(prices, window=60)
     assert v is not None and v > 0
+
+
+def test_price_levels_structure():
+    from libre_quant.accounts import price_levels
+    days = _days(300)
+    # 带波动的序列（否则 ±1σ 被 4 位小数舍入抹平）
+    prices = [1.0 * (1.0005 ** i) * (1 + (0.01 if i % 2 else -0.01))
+              for i in range(300)]
+    lv = price_levels(days, prices)
+    assert lv["last"] == prices[-1]
+    assert set(lv["bands"]) == {"1", "3", "5"}
+    w1 = lv["bands"]["1"][1] - lv["bands"]["1"][0]
+    w5 = lv["bands"]["5"][1] - lv["bands"]["5"][0]
+    assert w5 > w1 > 0                                # 带宽随天数张开（√t）
+    assert lv["bands"]["1"][0] <= lv["last"] <= lv["bands"]["1"][1]
+    assert set(lv["ma"]) == {"20", "60", "120"}
+    assert "-5%" in lv["drawdown"]
+
+
+def test_ladder_fixed_anchor_locks_cash_on_uptrend():
+    """固定锚阶梯在上行资产上会把钱锁死（docs/15 实测结论的回归测试）。"""
+    from libre_quant.accounts import simulate_ladder
+    days = _days(200)
+    prices = [1.0 * (1.002 ** i) for i in range(200)]
+    r = simulate_ladder(days, prices, base_price=prices[0],
+                        buy_levels=[(-0.05, 1.0)], sell_levels=[],
+                        daily=200.0, start=days[0])
+    assert r["buys"] == 0                            # 一路上涨，从未触发
+    assert r["cash"] == 200.0 * 200                  # 钱全在现金里

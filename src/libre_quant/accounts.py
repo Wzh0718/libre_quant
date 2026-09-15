@@ -27,6 +27,10 @@ if str(PROJECT_ROOT) not in sys.path:
 
 TRADING_DAYS = 244
 
+#: 默认阶梯档位（相对基准价的偏移 → 动作强度）
+DEFAULT_BUY_LEVELS = [(-0.05, 1.0), (-0.10, 2.0), (-0.15, 3.0)]
+DEFAULT_SELL_LEVELS = [(0.15, 0.25), (0.25, 0.35), (0.40, 0.50)]
+
 #: 方案注册表：name → (中文名, 说明, 默认参数)
 PLANS: dict[str, tuple[str, str, dict]] = {
     "naive": ("朴素日投", "每个交易日按固定金额买入", {"daily": 200.0}),
@@ -35,6 +39,10 @@ PLANS: dict[str, tuple[str, str, dict]] = {
     "deep_value": ("折价重投", "折价/极低溢价时全投，溢价偏高时只投一半或暂停",
                    {"daily": 200.0, "gate": GATE_THRESH}),
     "monthly": ("月度定投", "每月首个交易日按月度金额买入", {"daily": 200.0}),
+    "ladder": ("价格阶梯", "钱照存；跌破买入档才投、涨破卖出档才回收（网格）",
+               {"daily": 200.0, "base_price": None,
+                "buy_levels": DEFAULT_BUY_LEVELS,
+                "sell_levels": DEFAULT_SELL_LEVELS}),
 }
 
 DEFAULT_FEE_RATE = 0.00005
@@ -280,3 +288,226 @@ def outlook(
                       "docs/04/05/08/12）。区间为波动率统计带（±1σ），"
                       "触发条件为闸门规则。",
     }
+
+
+# ---------------------------------------------------------------- 价格阶梯（网格）
+
+def simulate_ladder(
+    days: list[date], prices: list[float], *, base_price: float,
+    signal_prices: list[float] | None = None,
+    buy_levels: list[tuple[float, float]],
+    sell_levels: list[tuple[float, float]],
+    daily: float, start: date, cash: float = 0.0, units: float = 0.0,
+    fee_rate: float = DEFAULT_FEE_RATE, fee_min: float = DEFAULT_FEE_MIN,
+    rearm_gap: float = 0.01, anchor: str = "fixed",
+    anchor_window: int = 252,
+) -> dict:
+    """价格阶梯（混合制）：钱照存，**价格触发**才投出/回收。
+
+    * 买入档 ``(offset, mult)``：价格 ≤ base×(1+offset) 且该档已"武装"
+      → 投出 ``daily×mult``（不超过可用现金），随即解除武装；
+      价格回升超过档位 ``rearm_gap`` 后重新武装（可再次触发）。
+    * 卖出档 ``(offset, frac)``：价格 ≥ base×(1+offset) 且已武装
+      → 卖出 ``frac`` 比例的持仓，现金回笼；价格回落 ``rearm_gap`` 后重新武装。
+    * 每个交易日先按储蓄节奏 ``cash += daily``。
+
+    ``prices`` 用于**成交与计价**（不复权，份额真实）；``signal_prices``
+    用于**触发判定**（前复权，避免份额折算造成的假跌破）。
+
+    ``anchor``：
+    * ``"fixed"`` —— 锚定固定基准价。**上涨资产上会失效**（实测 11 年只触发
+      6 次、99.98% 的钱锁在现金里），只适合震荡市。
+    * ``"rolling_high"`` —— 锚定**近 anchor_window 日滚动高点**，即
+      "从高点回撤 X% 才买"，能随资产上涨自动上移（推荐形态）。
+    """
+    sig = signal_prices if signal_prices is not None else prices
+    trades: list[Trade] = []
+    buy_armed = [True] * len(buy_levels)
+    sell_armed = [True] * len(sell_levels)
+    invested = fees = 0.0
+    buys = sells = 0
+    journal: list[dict] = []
+    curve: list[float] = []
+
+    hi = 0.0
+    for t, d in enumerate(days):
+        if d < start:
+            curve.append(units * prices[t] + cash)
+            continue
+        lo_i = max(0, t - anchor_window + 1)
+        hi = max(sig[lo_i:t + 1]) if anchor == "rolling_high" else base_price
+        cash += daily
+        invested += daily
+        px = prices[t]          # 成交价（不复权）
+        sig_px = sig[t]         # 触发价（前复权）
+        action, amount = "持有", 0.0
+
+        # --- 买入档
+        for i, (off, mult) in enumerate(buy_levels):
+            trig = hi * (1 + off)
+            if buy_armed[i] and sig_px <= trig and cash > 0:
+                want = min(daily * mult, cash)
+                if want >= fee_min:
+                    f = max(want * fee_rate, fee_min)
+                    units += (want - f) / px
+                    cash -= want
+                    fees += f
+                    invested += 0.0
+                    buy_armed[i] = False
+                    buys += 1
+                    action, amount = f"买入档{off:+.0%}", want
+                    trades.append(Trade(day=d, action="buy", price=px,
+                                        qty=(want - f) / px, amount=want,
+                                        fee=f, note=action))
+            elif not buy_armed[i] and sig_px >= trig * (1 + rearm_gap):
+                buy_armed[i] = True
+
+        # --- 卖出档
+        for j, (off, frac) in enumerate(sell_levels):
+            trig = hi * (1 + off)
+            if sell_armed[j] and sig_px >= trig and units > 0:
+                qty = units * frac
+                amt = qty * px
+                f = max(amt * fee_rate, fee_min)
+                units -= qty
+                cash += amt - f
+                fees += f
+                sells += 1
+                sell_armed[j] = False
+                action, amount = f"卖出档{off:+.0%}", amt
+                trades.append(Trade(day=d, action="sell", price=px,
+                                    qty=qty, amount=amt, fee=f, note=action))
+            elif not sell_armed[j] and sig_px <= trig * (1 - rearm_gap):
+                sell_armed[j] = True
+
+        curve.append(units * px + cash)
+        journal.append({"day": str(d), "price": px, "action": action,
+                        "amount": round(amount, 2), "units": round(units, 3),
+                        "cash": round(cash, 2),
+                        "value": round(curve[-1], 2)})
+
+    return {"journal": journal, "curve": curve, "units": units, "cash": cash,
+            "invested": invested, "fees": fees, "buys": buys, "sells": sells,
+            "value": curve[-1] if curve else 0.0, "trades": trades}
+
+
+def price_levels(days: list[date], prices: list[float], *,
+                 prem: dict[date, float] | None = None,
+                 lookback: int = 252) -> dict:
+    """用**数据**给出候选买/卖价位（不是预测，是统计参考）。
+
+    * 波动率带：未来 1/3/5 日的 ±1σ 价格区间（已实现波动率）
+    * 均线位置：MA20/60/120（常见的支撑/压力参考）
+    * 回撤分布：近一年从滚动高点回撤到 5/10/15/20% 的次数与占比
+    * 溢价等价价：若溢价回到 2%，同净值下对应的价格（QDII 专用）
+    """
+    last = prices[-1]
+    vol = realized_vol(prices)
+    sd = (vol / math.sqrt(TRADING_DAYS)) if vol else None
+    bands = {}
+    for h in (1, 3, 5):
+        if sd:
+            bands[str(h)] = [round(last * (1 - sd * math.sqrt(h)), 4),
+                             round(last * (1 + sd * math.sqrt(h)), 4)]
+    ma = {str(n): (round(sum(prices[-n:]) / n, 4) if len(prices) >= n else None)
+          for n in (20, 60, 120)}
+
+    win = prices[-lookback:]
+    peak = win[0]
+    hit = {5: 0, 10: 0, 15: 0, 20: 0}
+    for p in win:
+        peak = max(peak, p)
+        dd = (1 - p / peak) * 100
+        for lvl in hit:
+            if dd >= lvl:
+                hit[lvl] += 1
+    n = len(win)
+    drawdown = {f"-{k}%": {"days": v, "share": v / n if n else None,
+                           "price": round(peak * (1 - k / 100), 4)}
+                for k, v in hit.items()}
+
+    prem_eq = None
+    if prem:
+        cur = prem.get(days[-1]) if days else None
+        if cur is not None and cur > 0.02:
+            # 价格 = 净值×(1+溢价)；净值不变时，溢价降到 2% 的价格
+            prem_eq = round(last / (1 + cur) * 1.02, 4)
+
+    return {"last": last, "vol_ann": vol, "sigma_day": sd,
+            "bands": bands, "ma": ma, "drawdown": drawdown,
+            "premium_now": (prem.get(days[-1]) if prem and days else None),
+            "price_if_premium_2pct": prem_eq}
+
+
+def simulate_hybrid(
+    days: list[date], prices: list[float], *, signal_prices: list[float] | None = None,
+    base_daily: float, reserve_daily: float,
+    buy_levels: list[tuple[float, float]], daily_total: float,
+    start: date, anchor_window: int = 252,
+    fee_rate: float = DEFAULT_FEE_RATE, fee_min: float = DEFAULT_FEE_MIN,
+    rearm_gap: float = 0.01,
+) -> dict:
+    """**基础定投 + 回撤加码**（连续储蓄流 × 价格触发的最优混合形态）。
+
+    * 每日固定投出 ``base_daily``（保证始终在场，避免现金拖累）；
+    * 其余 ``reserve_daily`` 进储备金；
+    * 价格从 ``anchor_window`` 日滚动高点回撤到档位 ``off`` 时，
+      投出储备金的 ``frac`` 比例（分批抄底，不是一次梭哈）。
+    """
+    sig = signal_prices if signal_prices is not None else prices
+    armed = [True] * len(buy_levels)
+    cash = units = invested = fees = 0.0
+    buys = sells = deploys = 0
+    journal: list[dict] = []
+    curve: list[float] = []
+    trades: list[Trade] = []
+
+    for t, d in enumerate(days):
+        if d < start:
+            curve.append(units * prices[t] + cash)
+            continue
+        cash += reserve_daily
+        invested += daily_total
+        px = prices[t]
+
+        # --- 基础定投（每天都买）
+        if base_daily > 0:
+            f = max(base_daily * fee_rate, fee_min)
+            units += (base_daily - f) / px
+            fees += f
+            buys += 1
+            trades.append(Trade(day=d, action="buy", price=px,
+                                qty=(base_daily - f) / px, amount=base_daily,
+                                fee=f, note="基础定投"))
+
+        # --- 回撤加码
+        hi = max(sig[max(0, t - anchor_window + 1):t + 1])
+        action, amount = "持有", 0.0
+        for i, (off, frac) in enumerate(buy_levels):
+            trig = hi * (1 + off)
+            if armed[i] and sig[t] <= trig and cash > fee_min:
+                want = cash * frac
+                if want >= fee_min:
+                    f = max(want * fee_rate, fee_min)
+                    units += (want - f) / px
+                    cash -= want
+                    fees += f
+                    buys += 1
+                    deploys += 1
+                    armed[i] = False
+                    action, amount = f"加码档{off:+.0%}", want
+                    trades.append(Trade(day=d, action="buy", price=px,
+                                        qty=(want - f) / px, amount=want,
+                                        fee=f, note=action))
+            elif not armed[i] and sig[t] >= trig * (1 + rearm_gap):
+                armed[i] = True
+
+        curve.append(units * px + cash)
+        journal.append({"day": str(d), "price": px, "action": action,
+                        "amount": round(amount, 2), "units": round(units, 3),
+                        "cash": round(cash, 2), "value": round(curve[-1], 2)})
+
+    return {"journal": journal, "curve": curve, "units": units, "cash": cash,
+            "invested": invested, "fees": fees, "buys": buys, "sells": sells,
+            "deploys": deploys, "value": curve[-1] if curve else 0.0,
+            "trades": trades}

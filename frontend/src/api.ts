@@ -406,3 +406,27 @@ export async function deleteAccount(aid: number): Promise<void> {
 
 export const fetchOutlook = (aid: number, n = 3) =>
   getJson<OutlookData>(`/api/accounts/${aid}/outlook?n=${n}`);
+
+// ---------------------------------------------------------------- 价格参考位
+
+export interface LevelItem { offset: number; price: number; mult?: number; frac?: number }
+
+export interface LevelsData {
+  code: string;
+  name: string;
+  as_of: string;
+  last: number;
+  vol_ann: number | null;
+  sigma_day: number | null;
+  bands: Record<string, [number, number]>;
+  ma: Record<string, number | null>;
+  drawdown: Record<string, { days: number; share: number | null; price: number }>;
+  premium_now: number | null;
+  price_if_premium_2pct: number | null;
+  ladder: { buy: LevelItem[]; sell: LevelItem[] };
+  empty?: boolean;
+  note?: string;
+}
+
+export const fetchLevels = (code: string) =>
+  getJson<LevelsData>(`/api/levels?code=${code}`);
