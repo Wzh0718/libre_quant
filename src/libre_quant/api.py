@@ -23,7 +23,42 @@ DIST = PROJECT_ROOT / "frontend" / "dist"
 def _name_of(code: str) -> str:
     from libre_quant.universe import UNIVERSE
     a = UNIVERSE.get(code)
-    return a.name if a else code
+    if a:
+        return a.name
+    try:
+        from libre_quant import store
+        conn = store.connect()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT name FROM asset_meta WHERE code = %s", (code,))
+                row = cur.fetchone()
+                if row:
+                    return row[0]
+        finally:
+            conn.close()
+    except Exception:  # noqa: BLE001 —— 名称查询失败不该影响主链路
+        pass
+    return code
+
+
+def _in_db(code: str) -> bool:
+    try:
+        from libre_quant import store
+        conn = store.connect()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT 1 FROM price WHERE code = %s LIMIT 1", (code,))
+                if cur.fetchone():
+                    return True
+                cur.execute(
+                    "SELECT 1 FROM nav WHERE code = %s LIMIT 1", (code,))
+                return cur.fetchone() is not None
+        finally:
+            conn.close()
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def create_app(*, with_scheduler: bool = False) -> FastAPI:
@@ -73,7 +108,10 @@ def create_app(*, with_scheduler: bool = False) -> FastAPI:
 
         conn = store.connect()
         try:
-            days, raw, adj = store.load_prices(conn, code)
+            days, raw, adj, _src = store.load_series(conn, code)
+            if not days:
+                return {"code": code, "name": _name_of(code), "empty": True,
+                        "reason": "库中无数据，请先检索入库"}
             prem = store.load_premiums(conn, code)
             keys, mcloses = month_series(days, adj)
             i = len(mcloses) - 1
@@ -106,10 +144,13 @@ def create_app(*, with_scheduler: bool = False) -> FastAPI:
 
         conn = store.connect()
         try:
-            days, raw, adj = store.load_prices(conn, code)
+            days, raw, adj, src = store.load_series(conn, code)
+            if not days:
+                return {"code": code, "name": _name_of(code), "empty": True,
+                        "note": "库中无数据，请先检索入库"}
             prem = store.load_premiums(conn, code)
             pa = premium_analytics(days, adj, prem)
-            win = [d for d in days if d in prem][-504:]
+            win = ([d for d in days if d in prem] or days)[-504:]
             px0 = raw[days.index(win[0])] if win else 1.0
             with conn.cursor() as cur:
                 cur.execute(
@@ -141,7 +182,10 @@ def create_app(*, with_scheduler: bool = False) -> FastAPI:
 
         conn = store.connect()
         try:
-            days, raw, adj = store.load_prices(conn, code)
+            days, raw, adj, _src = store.load_series(conn, code)
+            if not days:
+                return {"code": code, "name": _name_of(code), "empty": True,
+                        "note": "库中无数据，请先检索入库"}
             prem = store.load_premiums(conn, code)
             keys, mcloses = month_series(days, adj)
             above = dict(zip(days, daily_positions(
@@ -166,7 +210,7 @@ def create_app(*, with_scheduler: bool = False) -> FastAPI:
 
         conn = store.connect()
         try:
-            days, raw, adj = store.load_prices(conn, code)
+            days, raw, adj, _src = store.load_series(conn, code)
             navs = store.load_navs(conn, code)
             if not navs:
                 return {"code": code, "name": _name_of(code), "n": 0,
@@ -199,13 +243,18 @@ def create_app(*, with_scheduler: bool = False) -> FastAPI:
 
         conn = store.connect()
         try:
-            days, raw, adj = store.load_prices(conn, code)
+            days, raw, adj, _src = store.load_series(conn, code)
+            if not days:
+                return {"code": code, "name": _name_of(code), "empty": True,
+                        "note": "库中无数据，请先检索入库"}
             prem = store.load_premiums(conn, code)
             with conn.cursor() as cur:
                 cur.execute(
                     "SELECT open, high, low FROM price WHERE code = %s "
                     "ORDER BY day", (code,))
                 ohl = cur.fetchall()
+            if len(ohl) != len(days):      # 场外基金（净值序列）无 OHLC
+                ohl = [(None, None, None)] * len(days)
             opens = [float(r[0]) if r[0] is not None else None for r in ohl]
             highs = [float(r[1]) if r[1] is not None else None for r in ohl]
             lows = [float(r[2]) if r[2] is not None else None for r in ohl]
@@ -260,6 +309,96 @@ def create_app(*, with_scheduler: bool = False) -> FastAPI:
             "premium": prem, "gate": gate_decision(prem),
             "note": "盘中实时（收盘前参考；日终以入库的收盘价为准）",
         }
+
+    @app.get("/api/resolve")
+    def resolve(code: str) -> dict:
+        """探测任意基金/股票代码：名称、类别、历史覆盖（不写库）。"""
+        from dataclasses import asdict
+
+        from fastapi import HTTPException
+
+        from libre_quant.data.discover import discover
+
+        try:
+            d = discover(code)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        out = asdict(d)
+        out["ok"] = d.ok
+        out["in_db"] = _in_db(code)
+        return out
+
+    @app.post("/api/ingest")
+    def ingest(code: str) -> dict:
+        """把任意代码的历史数据拉进库（幂等）；之后所有分析页可用。"""
+        from datetime import date as _date
+
+        from fastapi import HTTPException
+
+        from libre_quant import store
+        from scripts.ingest import ingest_one, resolve_one
+
+        try:
+            asset = resolve_one(code)
+        except (KeyError, ValueError) as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
+        conn = store.connect()
+        try:
+            store.init_db(conn)
+            r = ingest_one(conn, asset, _date.today())
+        finally:
+            conn.close()
+        return {"code": asset.code, "name": asset.name, "kind": asset.kind,
+                **r}
+
+    @app.get("/api/assets")
+    def assets() -> dict:
+        """库里已有数据的标的清单（含注册表外代码）。"""
+        from libre_quant import store
+        from libre_quant.universe import UNIVERSE
+
+        conn = store.connect()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT code, count(*), min(day), max(day) FROM price "
+                    "GROUP BY code ORDER BY code")
+                price_rows = cur.fetchall()
+                cur.execute(
+                    "SELECT code, count(*), min(nav_day), max(nav_day) FROM nav "
+                    "GROUP BY code ORDER BY code")
+                nav_rows = cur.fetchall()
+                cur.execute("SELECT DISTINCT code FROM premium")
+                prem_codes = {r[0] for r in cur.fetchall()}
+                cur.execute("SELECT code, name FROM asset_meta")
+                meta_names = dict(cur.fetchall())
+        finally:
+            conn.close()
+
+        items = []
+        for code, n, lo, hi in price_rows:
+            a = UNIVERSE.get(code)
+            nm = a.name if a else meta_names.get(code, code)
+            items.append({"code": code, "name": nm,
+                          "has_price": True, "has_nav": False,
+                          "has_premium": code in prem_codes,
+                          "span": [str(lo), str(hi)], "bars": n,
+                          "in_universe": a is not None})
+        known = {i["code"] for i in items}
+        for code, n, lo, hi in nav_rows:
+            if code in known:
+                next(i for i in items if i["code"] == code)["has_nav"] = True
+                continue
+            a = UNIVERSE.get(code)
+            nm = a.name if a else meta_names.get(code, code)
+            items.append({"code": code, "name": nm,
+                          "has_price": False, "has_nav": True,
+                          "has_premium": code in prem_codes,
+                          "span": [str(lo), str(hi)], "bars": n,
+                          "in_universe": a is not None})
+        items.sort(key=lambda x: (not x["in_universe"], x["code"]))
+        return {"items": items}
 
     @app.get("/api/health")
     def health() -> dict:

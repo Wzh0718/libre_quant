@@ -22,6 +22,7 @@ from datetime import date
 KIND_DOMESTIC_ETF = "domestic_etf"   # A 股上市、底层为 A 股指数
 KIND_QDII_ETF = "qdii_etf"           # A 股上市、底层为境外指数（溢价是一等公民）
 KIND_US_ETF = "us_etf"               # 美股上市（SPY/QQQ，美股信号源）
+KIND_A_STOCK = "a_stock"             # A 股个股（有价格、无净值 → 无溢价概念）
 
 #: 数据源标签（store.price.source / store.nav.source）
 SRC_TENCENT = "tencent"
@@ -41,7 +42,8 @@ class Asset:
     nav_lag_days: int = 0
     #: 抓取起始日（安全上界：早于上市日也无妨，源只返回实际存在的数据）
     data_from: date = date(2013, 1, 1)
-    price_source: str = SRC_TENCENT
+    #: 场内行情源；场外基金为 None（只有净值序列）
+    price_source: str | None = SRC_TENCENT
     nav_source: str | None = None
 
     @property
@@ -99,3 +101,69 @@ def get(code: str) -> Asset:
     except KeyError:
         known = ", ".join(sorted(UNIVERSE))
         raise KeyError(f"未知标的 {code!r}；universe 内有: {known}") from None
+
+
+# ---------------------------------------------------------------- 动态标的解析
+#: 场外基金 / QDII 名称关键词（用于自动判定类别，命中即视为 QDII）
+_QDII_HINTS = ("纳指", "纳斯达克", "标普", "道琼斯", "恒生", "港股", "中概",
+               "海外", "全球", "美国", "德国", "日经", "法国", "亚太", "QDII",
+               "美元", "越南", "印度", "东南亚")
+
+#: 沪市基金前缀 / 深市基金前缀（场内 ETF/LOF）
+_FUND_PREFIX = ("5", "1")
+
+
+def classify_code(code: str) -> tuple[str, str]:
+    """按代码形态判定（交易所, 候选类别）。纯函数，不联网。
+
+    返回 ``(market, kind)``，market ∈ {sh, sz, bj, us}，kind 见 KIND_*。
+    基金代码（5/1 开头）默认按 ETF 处理，最终 domestic/qdii 由名称探测决定。
+    """
+    c = code.strip().upper()
+    if not c:
+        raise ValueError("空代码")
+    if c.isalpha() or "." in c:          # US 标的（QQQ / BRK.B）
+        return "us", KIND_US_ETF
+    if not c.isdigit() or len(c) != 6:
+        raise ValueError(f"无法识别的代码形态: {code}")
+    if c[0] in _FUND_PREFIX:             # 5xxxxx 沪市基金 / 1xxxxx 深市基金
+        market = "sh" if c[0] == "5" else "sz"
+        return market, KIND_DOMESTIC_ETF
+    if c[0] == "6":
+        return "sh", KIND_A_STOCK
+    if c[0] in ("0", "3"):
+        return "sz", KIND_A_STOCK
+    if c[0] in ("4", "8"):
+        return "bj", KIND_A_STOCK
+    # 其余（2/9/7…）只可能是场外基金
+    return "otc", KIND_DOMESTIC_ETF
+
+
+def kind_from_name(name: str | None, *, is_fund: bool) -> str:
+    """按名称关键词判断 domestic/qdii（基金）；非基金返回 a_stock。"""
+    if not is_fund:
+        return KIND_A_STOCK
+    if name and any(h in name for h in _QDII_HINTS):
+        return KIND_QDII_ETF
+    return KIND_DOMESTIC_ETF
+
+
+def asset_from_parts(code: str, name: str | None, *, is_fund: bool,
+                     qdii: bool | None = None,
+                     otc: bool = False) -> "Asset":
+    """构造动态 Asset（不联网）。
+
+    QDII 用 lag=2（保守），国内基金 lag=1；``otc=True``（场外基金）
+    表示无场内价格，只有净值序列。
+    """
+    kind = (KIND_QDII_ETF if qdii else KIND_DOMESTIC_ETF) if is_fund \
+        else KIND_A_STOCK
+    if qdii is None:
+        kind = kind_from_name(name, is_fund=is_fund)
+    return Asset(
+        code=code, name=name or code, kind=kind,
+        nav_lag_days=(2 if kind == KIND_QDII_ETF else 1) if is_fund else 0,
+        data_from=date(2005, 1, 1),
+        price_source=None if otc else SRC_TENCENT,
+        nav_source=SRC_EASTMONEY if (is_fund or otc) else None,
+    )

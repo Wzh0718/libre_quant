@@ -102,6 +102,14 @@ CREATE TABLE IF NOT EXISTS intraday (
     PRIMARY KEY (code, ts)
 );
 COMMENT ON TABLE intraday IS '5 分钟线（东财，约 2 个月滚动窗口）：盘中判定与成交价现实性检验';
+
+CREATE TABLE IF NOT EXISTS asset_meta (
+    code       TEXT PRIMARY KEY,
+    name       TEXT NOT NULL,
+    kind       TEXT NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+COMMENT ON TABLE asset_meta IS '注册表外标的的名称/类别（用户输入任意代码检索入库时写入）';
 """
 
 
@@ -351,6 +359,26 @@ def load_prices(conn, code: str) -> tuple[list[date], list[float], list[float]]:
             [float(r[2]) for r in rows])
 
 
+def load_series(conn, code: str) -> tuple[list[date], list[float], list[float], str]:
+    """通用序列加载：优先场内价格，其次基金净值（场外基金）。
+
+    返回 ``(days, raw, adj, source)``，source ∈ {"price", "nav", "none"}。
+    净值序列的 raw == adj（无复权概念）。
+    """
+    days, raw, adj = load_prices(conn, code)
+    if days:
+        return days, raw, adj, "price"
+    with conn.cursor() as cur:
+        cur.execute("SELECT nav_day, nav FROM nav WHERE code = %s ORDER BY nav_day",
+                    (code,))
+        rows = cur.fetchall()
+    if rows:
+        d = [r[0] for r in rows]
+        v = [float(r[1]) for r in rows]
+        return d, v, v, "nav"
+    return [], [], [], "none"
+
+
 def load_navs(conn, code: str) -> dict[date, float]:
     """nav_day → nav 全量。"""
     with conn.cursor() as cur:
@@ -363,6 +391,18 @@ def load_premiums(conn, code: str) -> dict[date, float]:
     with conn.cursor() as cur:
         cur.execute("SELECT day, premium FROM premium WHERE code = %s", (code,))
         return {r[0]: float(r[1]) for r in cur.fetchall()}
+
+
+def upsert_asset_meta(conn, code: str, name: str, kind: str) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO asset_meta (code, name, kind) VALUES (%s, %s, %s)
+            ON CONFLICT (code) DO UPDATE SET
+                name = EXCLUDED.name, kind = EXCLUDED.kind, updated_at = now()
+            """,
+            (code, name, kind))
+    conn.commit()
 
 
 # ---------------------------------------------------------------- 场外/日内
@@ -435,8 +475,9 @@ def load_intraday(conn, code: str, day: date) -> list[tuple]:
 __all__ = [
     "SCHEMA_SQL", "connect", "init_db",
     "upsert_prices", "upsert_navs", "refresh_premium",
-    "load_closes", "load_prices", "load_navs", "load_premiums",
+    "load_closes", "load_prices", "load_series", "load_navs", "load_premiums",
     "upsert_macro", "load_macro", "upsert_intraday", "load_intraday",
+    "upsert_asset_meta",
     "premium_latest",
     "signal_upsert", "shadow_state_before", "shadow_upsert",
     "shadow_history", "signal_history",

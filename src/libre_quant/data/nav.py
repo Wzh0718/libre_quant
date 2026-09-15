@@ -81,17 +81,10 @@ def parse_pingzhong(text: str) -> list[NavPoint]:
     return [out[d] for d in sorted(out)]
 
 
-def fetch_nav_history(
-    code: str,
-    *,
-    session: requests.Session | None = None,
-    timeout: float = 25.0,
-) -> list[NavPoint]:
-    """抓取某基金全历史净值，按日期升序。"""
+def _fetch_pingzhong(code: str, session, timeout: float) -> str:
     sess = session or requests.Session()
     sess.headers.update({"User-Agent": _UA})
     sess.trust_env = False  # 沙箱代理对本域名不稳定
-
     resp = sess.get(
         PINGZHONG_URL.format(code=code),
         headers={"Referer": "https://fund.eastmoney.com/"},
@@ -99,4 +92,26 @@ def fetch_nav_history(
     )
     resp.raise_for_status()
     # 必须显式 UTF-8：响应头未声明 charset 时 requests 退化成 latin-1
-    return parse_pingzhong(resp.content.decode("utf-8", errors="replace"))
+    return resp.content.decode("utf-8", errors="replace")
+
+
+def fetch_nav_history(
+    code: str,
+    *,
+    session: requests.Session | None = None,
+    timeout: float = 25.0,
+) -> list[NavPoint]:
+    """抓取某基金全历史净值，按日期升序。"""
+    return parse_pingzhong(_fetch_pingzhong(code, session, timeout))
+
+
+def fetch_fund_name(
+    code: str,
+    *,
+    session: requests.Session | None = None,
+    timeout: float = 25.0,
+) -> str | None:
+    """抓基金全名（pingzhongdata 的 fS_name），用于显示与 QDII 判定。"""
+    text = _fetch_pingzhong(code, session, timeout)
+    m = re.search(r'fS_name\s*=\s*"([^"]*)"', text)
+    return m.group(1) if m else None

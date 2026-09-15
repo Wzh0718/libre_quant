@@ -241,3 +241,62 @@ export const fmtPct = (x: number | null, digits = 2, sign = true): string =>
 
 export const fmtYuan = (x: number): string =>
   Math.round(x).toLocaleString("zh-CN");
+
+
+// ---------------------------------------------------------------- 标的检索
+
+export interface ResolveInfo {
+  code: string;
+  name: string;
+  kind: string;
+  market: string;
+  has_price: boolean;
+  has_nav: boolean;
+  first_price: string | null;
+  last_price: string | null;
+  first_nav: string | null;
+  last_nav: string | null;
+  notes: string[];
+  ok: boolean;
+  in_db: boolean;
+}
+
+export interface IngestResult {
+  code: string;
+  name: string;
+  kind: string;
+  bars: number;
+  navs: number;
+  price_span: string;
+  nav_span: string;
+  prem_rows: number;
+  prem_latest: number | null;
+}
+
+export interface AssetItem {
+  code: string;
+  name: string;
+  has_price: boolean;
+  has_nav: boolean;
+  has_premium: boolean;
+  span: [string, string];
+  bars: number;
+  in_universe: boolean;
+}
+
+export const resolveCode = (code: string) =>
+  getJson<ResolveInfo>(`/api/resolve?code=${encodeURIComponent(code)}`);
+
+export async function ingestCode(code: string): Promise<IngestResult> {
+  const r = await fetch(`/api/ingest?code=${encodeURIComponent(code)}`, {
+    method: "POST",
+  });
+  if (!r.ok) {
+    const detail = await r.json().catch(() => ({ detail: `HTTP ${r.status}` }));
+    throw new Error(detail.detail ?? `HTTP ${r.status}`);
+  }
+  return r.json();
+}
+
+export const fetchAssets = () =>
+  getJson<{ items: AssetItem[] }>("/api/assets");
