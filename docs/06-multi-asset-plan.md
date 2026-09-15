@@ -98,11 +98,13 @@
     家中虽有现成 MySQL（爬虫栈），但 PG 的 SQL 特性
     （`LATERAL` / `DISTINCT ON` / 窗口函数生态）对研究查询更顺手。
   - 不引入 TimescaleDB（分区/压缩对 <5 万行是过度设计）。
-  - **落地状态（2026-09-15）**：`src/libre_quant/store.py`（schema/upsert/溢价刷新/
-    分析端读取）、`scripts/ingest.py`（采集入口，`--dry-run` 无 DB 冒烟、
-    `--init-db` 首次建表）已就绪并全标的冒烟通过（数量与 §二实测一致）。
-    **待办仅剩**：家服务器配好 `.env` / Komodo 环境变量 →
-    `uv run python scripts/serve.py --once` 首轮灌数 → Komodo 挂常驻容器。
+  - **落地状态（2026-09-15）**：✅ **已入库并验收通过**。家服务器 PG 18.1
+    （Tailscale 网段，5432 不出公网），三表全量：
+    price 1703/3080/3244/6461/4869 根、nav 1709/3010/3214 条、premium 8027 行；
+    溢价对账：515880 +0.02% / 513500 +9.33% / 513100 +11.40%（与手动测算一致）；
+    `load_closes` 走库回测链路验证通过。盘中当日 bar 的 adj_close 暂空
+    （COALESCE 回退到不复权价），次日常驻任务 upsert 自动补齐。
+    剩余：Komodo 挂常驻容器（`serve.py`，环境变量注入 `DATABASE_URL`）。
 - 1b. **QDII 溢价率序列**：✅ 净值通路已实测打通（§二、§八），
   溢价 = `price` 与 `nav` 的 ASOF 配对（T 日价格 ÷ 最近已公布净值），
   由每日任务写入 `premium` 物化表（1a）。✅ `store.refresh_premium` 已实现
