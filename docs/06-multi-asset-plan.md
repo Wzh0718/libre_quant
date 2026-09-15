@@ -84,10 +84,12 @@
     另加**物化表 `premium(code, day, nav_day_used, premium)`**，
     由每日更新任务按「最近已公布净值」规则刷新 —— 把 ASOF 配对逻辑固化在
     **写入时**（§8.2 的惯例规则），查询端零特殊语法。
-  - 部署：**采集/更新 cron 跑在家服务器本地**；任何地方的分析端只读连接。
-    配置经 `libre_quant.config.Settings`（**pydantic-settings**）统一管理，
-    模板 `.env.example`，使用时 `cp .env.example .env` 填写即可；
-    `.env` 已进 `.gitignore`。
+  - 部署（2026-09-15 修订）：**GitHub 托管 + Komodo 容器部署**，
+    定时任务内嵌框架而非宿主 cron —— `scripts/serve.py`（APScheduler
+    BlockingScheduler，Asia/Shanghai 周一~五 20:00，启动幂等建表，
+    `--catchup` 补跑、`--once` 单轮验证）；仓库含 `Dockerfile`，
+    `DATABASE_URL` 由 Komodo 环境注入（单账号即可，管理员权限）。
+    5432 不暴露公网，跨机器走 wireguard/tailscale 或 SSH 隧道。
   - 安全：5432 **不暴露公网**，走 wireguard/tailscale 或 SSH 隧道。
   - 备份：`pg_dump` cron 即可（数据 <5 万行）。
   - 选型对比：原推荐 DuckDB 单文件的前提是"单机分析"，前提已不成立；
@@ -99,8 +101,8 @@
   - **落地状态（2026-09-15）**：`src/libre_quant/store.py`（schema/upsert/溢价刷新/
     分析端读取）、`scripts/ingest.py`（采集入口，`--dry-run` 无 DB 冒烟、
     `--init-db` 首次建表）已就绪并全标的冒烟通过（数量与 §二实测一致）。
-    **待办仅剩**：家服务器配好 `.env` → `uv run python scripts/ingest.py --init-db`
-    → 挂 cron。
+    **待办仅剩**：家服务器配好 `.env` / Komodo 环境变量 →
+    `uv run python scripts/serve.py --once` 首轮灌数 → Komodo 挂常驻容器。
 - 1b. **QDII 溢价率序列**：✅ 净值通路已实测打通（§二、§八），
   溢价 = `price` 与 `nav` 的 ASOF 配对（T 日价格 ÷ 最近已公布净值），
   由每日任务写入 `premium` 物化表（1a）。✅ `store.refresh_premium` 已实现

@@ -70,8 +70,14 @@ uv run python scripts/us_lead_test.py
 # PCF 解析器离线自测
 uv run pytest -q
 
-# 全标的采集冒烟（不连数据库；入库见 docs/06 Phase 1a）
+# 全标的采集冒烟（不连数据库）
 uv run python scripts/ingest.py --dry-run
+
+# 入库（首次/手动一轮）
+uv run python scripts/serve.py --once
+
+# 常驻采集服务（容器/Komodo 形态，内嵌 APScheduler 替代 cron）
+uv run python scripts/serve.py --catchup
 ```
 
 配置（PostgreSQL / Tavily 等）用 pydantic-settings 统一管理：

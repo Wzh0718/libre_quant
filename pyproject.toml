@@ -5,6 +5,7 @@ description = "个人量化研究：以 515880 通信ETF 为载体，做 PCF 持
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "apscheduler>=3.11.3",
     "psycopg[binary]>=3.3.5",
     "pydantic-settings>=2.15.0",
     "requests>=2.32",
