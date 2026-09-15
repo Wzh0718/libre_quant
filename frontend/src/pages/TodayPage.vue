@@ -100,6 +100,10 @@ watch(selectedCode, load);
           <input v-model.number="planForm.gate" type="number" min="0" max="99" step="0.5"
                  style="display:block;width:120px;background:var(--bg);color:var(--text);
                         border:1px solid var(--border);border-radius:6px;padding:6px" />
+          <span style="display:block;max-width:260px;font-size:11px;line-height:1.45;margin-top:4px">
+            场内价高于净值的百分比。超过此值当天不买、钱攒着，回落当次补投。
+            建议 5%（唯一有三标的实证支持的阈值）。
+          </span>
         </label>
         <button class="badge badge-buy" style="cursor:pointer" @click="savePlan">保存</button>
         <button class="badge badge-hold" style="cursor:pointer" @click="runPreview">试算（近3年）</button>
@@ -119,6 +123,14 @@ watch(selectedCode, load);
         待投现金 {{ fmtYuan(preview.cash) }} 元
       </div>
       <div v-if="previewErr" style="margin-top:8px;color:var(--red)">⚠️ {{ previewErr }}</div>
+      <div v-if="data" class="muted" style="margin-top:8px;font-size:12px">
+        当前溢价 <b :style="(data.premium ?? 0) > (planForm.gate / 100)
+          ? 'color:var(--red)' : 'color:var(--green)'">{{ fmtPct(data.premium) }}</b>
+        · 按你填的 {{ planForm.gate }}% 阈值 →
+        {{ (data.premium ?? 0) > planForm.gate / 100 ? "今日暂停买入" : "今日可买入" }}
+        <span style="opacity:.75">
+          （溢价=场内价÷净值−1；多付的部分会在溢价回归时亏掉）</span>
+      </div>
       <div class="muted" style="margin-top:8px;font-size:12px">
         <template v-if="!plan.configured">
           ⚠️ 你还没设置参数 —— 下面的决策卡只陈述溢价状态，<b>不会替你决定投多少</b>。
