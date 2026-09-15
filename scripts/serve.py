@@ -34,7 +34,7 @@ log = logging.getLogger("quant.serve")
 
 
 def ingest_job(codes: str | None = None) -> int:
-    """一轮采集：init-db（幂等）→ 全标的抓取入库 → 刷新溢价。"""
+    """一轮采集：init-db（幂等）→ 全标的抓取入库 → 刷新溢价 → 影子盘步进。"""
     from scripts import ingest
 
     argv = ["--init-db"]
@@ -45,6 +45,20 @@ def ingest_job(codes: str | None = None) -> int:
     except Exception:  # noqa: BLE001 —— 常驻任务不允许一次失败炸掉调度器
         log.exception("ingest 本轮失败（保留调度，下轮重试）")
         return 1
+
+    # 影子盘当日步进（docs/10；失败不影响采集主链路）
+    try:
+        from libre_quant import store as _store
+        from scripts import shadow as shadow_mod
+
+        conn = _store.connect()
+        try:
+            log.info(shadow_mod.run_daily(conn))
+        finally:
+            conn.close()
+    except Exception:  # noqa: BLE001
+        log.exception("影子盘步进失败（不影响采集）")
+
     log.info("ingest 完成 rc=%s", rc)
     return rc
 

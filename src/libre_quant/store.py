@@ -57,6 +57,32 @@ CREATE TABLE IF NOT EXISTS premium (
 );
 COMMENT ON TABLE premium IS '溢价（写入时配对，无前视）：T日收盘 ÷ 严格早于T的第lag个净值标签 - 1';
 CREATE INDEX IF NOT EXISTS premium_code_day_idx ON premium (code, day);
+
+CREATE TABLE IF NOT EXISTS signal_log (
+    code       TEXT  NOT NULL,
+    day        DATE  NOT NULL,
+    close_raw  REAL  NOT NULL,            -- 当日不复权收盘（影子成交价代理）
+    nav_day_used DATE,
+    premium    REAL,
+    gate       TEXT  NOT NULL,            -- 'buy' | 'pause'
+    planned    REAL  NOT NULL,            -- 当日计划投入（元）
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (code, day)
+);
+COMMENT ON TABLE signal_log IS '影子盘每日信号（champion-challenger，docs/10）：闸门判定 + 计划金额，upsert 幂等';
+
+CREATE TABLE IF NOT EXISTS shadow_log (
+    code       TEXT  NOT NULL,
+    day        DATE  NOT NULL,
+    arm        TEXT  NOT NULL,            -- 'gate' | 'naive'
+    units      REAL  NOT NULL,
+    pending    REAL  NOT NULL,
+    invested   REAL  NOT NULL,
+    fees       REAL  NOT NULL,
+    value      REAL  NOT NULL,            -- units*close_raw + pending
+    PRIMARY KEY (code, day, arm)
+);
+COMMENT ON TABLE shadow_log IS '影子账本逐日快照（两臂并行）；状态从 day < T 的最近一行加载后重放，upsert 幂等';
 """
 
 
@@ -219,9 +245,87 @@ def premium_latest(conn, code: str, limit: int = 5) -> list[tuple]:
         return cur.fetchall()
 
 
+# ---------------------------------------------------------------- 影子盘 IO
+
+def signal_upsert(conn, code: str, day: date, close_raw: float,
+                  nav_day_used: date | None, premium: float | None,
+                  gate: str, planned: float) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO signal_log (code, day, close_raw, nav_day_used,
+                                    premium, gate, planned)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (code, day) DO UPDATE SET
+                close_raw = EXCLUDED.close_raw,
+                nav_day_used = EXCLUDED.nav_day_used,
+                premium = EXCLUDED.premium, gate = EXCLUDED.gate,
+                planned = EXCLUDED.planned, updated_at = now()
+            """,
+            (code, day, close_raw, nav_day_used, premium, gate, planned),
+        )
+    conn.commit()
+
+
+def shadow_state_before(conn, code: str, arm: str, day: date):
+    """day 之前最近的臂状态；无则返回 None（起跑日）。"""
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT units, pending, invested, fees FROM shadow_log "
+            "WHERE code = %s AND arm = %s AND day < %s "
+            "ORDER BY day DESC LIMIT 1",
+            (code, arm, day),
+        )
+        row = cur.fetchone()
+    return tuple(float(x) for x in row) if row else None
+
+
+def shadow_upsert(conn, code: str, day: date, arm: str,
+                  units: float, pending: float, invested: float,
+                  fees: float, value: float) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO shadow_log (code, day, arm, units, pending,
+                                    invested, fees, value)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (code, day, arm) DO UPDATE SET
+                units = EXCLUDED.units, pending = EXCLUDED.pending,
+                invested = EXCLUDED.invested, fees = EXCLUDED.fees,
+                value = EXCLUDED.value
+            """,
+            (code, day, arm, units, pending, invested, fees, value),
+        )
+    conn.commit()
+
+
+def shadow_history(conn, code: str, arm: str) -> list[tuple]:
+    """(day, units, pending, invested, fees, value) 升序。"""
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT day, units, pending, invested, fees, value "
+            "FROM shadow_log WHERE code = %s AND arm = %s ORDER BY day",
+            (code, arm),
+        )
+        return cur.fetchall()
+
+
+def signal_history(conn, code: str) -> list[tuple]:
+    """(day, premium, gate, planned) 升序。"""
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT day, premium, gate, planned FROM signal_log "
+            "WHERE code = %s ORDER BY day",
+            (code,),
+        )
+        return cur.fetchall()
+
+
 __all__ = [
     "SCHEMA_SQL", "connect", "init_db",
     "upsert_prices", "upsert_navs", "refresh_premium",
     "load_closes", "premium_latest",
+    "signal_upsert", "shadow_state_before", "shadow_upsert",
+    "shadow_history", "signal_history",
     "known_nav_for_day", "premium_rows", "get_asset",
 ]
