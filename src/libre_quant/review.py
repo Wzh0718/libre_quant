@@ -1,0 +1,235 @@
+"""看板分析层：策略复盘 / 溢价分析 / 今日决策推理（纯计算，离线可测）。
+
+数据组装在 ``api.py``（store 查询）；本模块只吃数组，全部函数可在无 DB
+环境下单测。所有口径与 scripts/backtest、scripts/dca、scripts/monthly_ma
+保持一致（直接复用其实现，不重复发明）。
+"""
+
+from __future__ import annotations
+
+import sys
+from datetime import date
+
+from libre_quant.config import PROJECT_ROOT
+from libre_quant.shadow import GATE_THRESH, gate_decision
+
+#: 复用 scripts/backtest、scripts/dca、scripts/monthly_ma 的实现，
+#: 需要仓库根在 sys.path（uvicorn/测试的 cwd 不保证）
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+TRADING_DAYS = 244
+BUCKETS = [(-9.9, 0.0, "<0%"), (0.0, 0.01, "0~1%"), (0.01, 0.02, "1~2%"),
+           (0.02, 0.05, "2~5%"), (0.05, 9.9, ">5%")]
+
+
+# ---------------------------------------------------------------- 策略复盘
+
+def strategy_review(days: list[date], closes: list[float]) -> dict:
+    """BH / MA60 / MA5月 / 波动率25%：指标 + 净值曲线（降采样）+ 分年。
+
+    注意 ``run`` 的第二返回值已是**净值曲线**（不是日收益序列）。
+    净值曲线第 t 点对应 days[t+1]。
+    """
+    from scripts.backtest import (
+        equity_curve, run, sig_buy_hold, sig_ma_filter_trend, sig_vol_target,
+    )
+    from scripts.monthly_ma import (
+        daily_positions, month_series, monthly_sig, run_positions,
+    )
+
+    def pack(m, eq) -> dict:
+        return {
+            "total": m.total, "cagr": m.cagr, "max_dd": m.max_dd,
+            "sharpe": m.sharpe, "exposure": m.exposure, "trades": m.trades,
+            "equity": _downsample(eq),
+            "yearly": _yearly_from_eq(days, eq),
+        }
+
+    out: dict[str, dict] = {}
+    for name, sig in [("买入持有", sig_buy_hold),
+                      ("MA60趋势", sig_ma_filter_trend(60)),
+                      ("波动率目标25%", sig_vol_target(0.25))]:
+        m, eq = run(closes, sig)
+        out[name] = pack(m, eq)
+
+    keys, mcloses = month_series(days, closes)
+    pos = daily_positions(days, keys, monthly_sig(keys, mcloses, 5))
+    m5, _ = run_positions(days, closes, pos)
+    eq5 = equity_curve(_positions_daily(closes, pos))
+    out["MA5月线"] = pack(m5, eq5)
+
+    return {"days": _downsample_dates(days[1:]),  # 与净值曲线对齐
+            "strategies": out}
+
+
+def _yearly_from_eq(days: list[date], eq: list[float]) -> dict:
+    """分年收益（净值曲线口径）：年末值 / 上年末值 - 1。"""
+    bounds: dict[int, int] = {}  # year -> 该年最后一个 eq 下标
+    for i, d in enumerate(days[1:]):
+        bounds[d.year] = i
+    out, prev = {}, 1.0
+    for y in sorted(bounds):
+        out[y] = eq[bounds[y]] / prev - 1
+        prev = eq[bounds[y]]
+    return out
+
+
+def _positions_daily(closes: list[float], pos: list[float],
+                     cost: float = 0.0005) -> list[float]:
+    daily, prev = [], 0.0
+    for t in range(1, len(closes)):
+        r = closes[t] / closes[t - 1] - 1
+        turn = abs(pos[t] - prev)
+        daily.append(pos[t] * r - turn * cost)
+        prev = pos[t]
+    return daily
+
+
+def _downsample(series: list[float], n: int = 600) -> list[float]:
+    if len(series) <= n:
+        return [round(v, 4) for v in series]
+    step = len(series) / n
+    return [round(series[int(i * step)], 4) for i in range(n)]
+
+
+def _downsample_dates(days: list[date], n: int = 600) -> list[str]:
+    if len(days) <= n:
+        return [str(d) for d in days]
+    step = len(days) / n
+    return [str(days[int(i * step)]) for i in range(n)]
+
+
+# ---------------------------------------------------------------- 定投复盘
+
+def dca_review(days: list[date], adj: list[float],
+               prem: dict[date, float], above_ma5: dict[date, float],
+               rate: float, min_fee: float, daily_amt: float = 200.0) -> list[dict]:
+    from scripts.dca import simulate
+
+    weekly, monthly = daily_amt * 5, daily_amt * 20
+    first_week = _first_of_week(days)
+    first_month = _first_of_month(days)
+
+    variants = [
+        ("每日定投", lambda d: daily_amt, lambda d: True),
+        ("每周定投", lambda d: weekly if d in first_week else 0.0, lambda d: True),
+        ("每月定投", lambda d: monthly if d in first_month else 0.0, lambda d: True),
+        ("每日+溢价>5%暂停", lambda d: daily_amt,
+         lambda d: prem.get(d, 0.0) <= GATE_THRESH),
+        ("每日+5月线上方才买", lambda d: daily_amt,
+         lambda d: above_ma5.get(d, 0.0) > 0),
+    ]
+    rows = []
+    for name, plan, ok in variants:
+        r = simulate(days, adj, plan, ok, rate, min_fee)
+        rows.append({
+            "name": name, "invested": r["invested"], "value": r["value"],
+            "xirr": r["xirr"], "dd": r["dd"], "buys": r["buys"],
+            "fees": r["fees"], "multiple": r["value"] / r["invested"],
+        })
+    return rows
+
+
+def _first_of_week(days: list[date]) -> set[date]:
+    return {d for i, d in enumerate(days)
+            if i == 0 or d.isoweekday() < days[i - 1].isoweekday()}
+
+
+def _first_of_month(days: list[date]) -> set[date]:
+    return {d for i, d in enumerate(days)
+            if i == 0 or d.month != days[i - 1].month}
+
+
+# ---------------------------------------------------------------- 溢价分析
+
+def premium_analytics(days: list[date], adj: list[float],
+                      prem: dict[date, float]) -> dict:
+    """分布统计 + 分桶前向收益（与 scripts/qdii_pricing 同口径）。"""
+    vals = [prem[d] for d in days if d in prem]
+    vals.sort()
+
+    def pct(q: float) -> float | None:
+        if not vals:
+            return None
+        i = min(len(vals) - 1, max(0, int(q * len(vals))))
+        return vals[i]
+
+    # 分桶前向收益（前复权）：fwd1 = 次日收益，fwd5 = 未来 5 日收益
+    idx = {d: i for i, d in enumerate(days)}
+    n_adj = len(adj)
+    buckets = []
+    for lo, hi, label in BUCKETS:
+        sel = [d for d in days if d in prem and lo <= prem[d] < hi]
+        f1 = [adj[idx[d] + 1] / adj[idx[d]] - 1
+              for d in sel if idx[d] + 1 < n_adj]
+        f5 = [adj[idx[d] + 5] / adj[idx[d]] - 1
+              for d in sel if idx[d] + 5 < n_adj]
+        buckets.append({
+            "label": label, "n": len(sel),
+            "fwd1": sum(f1) / len(f1) if f1 else None,
+            "fwd5": sum(f5) / len(f5) if f5 else None,
+            "is_danger": label == ">5%",
+        })
+
+    n = len(vals)
+    return {
+        "dist": {"p5": pct(0.05), "p25": pct(0.25), "p50": pct(0.5),
+                 "p75": pct(0.75), "p95": pct(0.95),
+                 "max": vals[-1] if vals else None},
+        "gt2": sum(1 for v in vals if v > 0.02) / n if n else None,
+        "gt5": sum(1 for v in vals if v > GATE_THRESH) / n if n else None,
+        "buckets": buckets,
+    }
+
+
+# ---------------------------------------------------------------- 今日决策
+
+def today_decision(*, code: str, name: str, day: date, close: float,
+                   premium: float | None, planned: float, pending: float,
+                   ma5_above: bool, ma5_close: float, ma5_value: float,
+                   vol60: float | None, buckets: list[dict]) -> dict:
+    """决策卡 + 推理链（每天投递的思路，全由数字生成）。"""
+    gate = gate_decision(premium)
+    target_pos = min(1.0, 0.25 / vol60) if vol60 else None
+
+    danger = next((b for b in buckets if b["is_danger"]), None)
+    ev = ""
+    if danger and danger["fwd5"] is not None:
+        ev = (f"依据：{code} 历史上溢价 >5% 的 {danger['n']} 天里，"
+              f"次日均值 {danger['fwd1']:+.2%}、5 日均值 {danger['fwd5']:+.2%}"
+              f"（docs/07 §三）")
+
+    reasons: list[str] = []
+    p_s = f"{premium:+.2%}" if premium is not None else "n/a"
+    if gate == "pause":
+        reasons.append(f"① 溢价检查：当前 {p_s} > 阈值 {GATE_THRESH:.0%} → "
+                       f"触发闸门，今日暂停买入。{ev}")
+        reasons.append(f"② 动作：今日 {planned:.0f} 元转入待投现金"
+                       f"（累计 {pending:.0f} 元）；溢价回落 ≤{GATE_THRESH:.0%} "
+                       f"当日连本带额一次补回。")
+    else:
+        reasons.append(f"① 溢价检查：当前 {p_s} ≤ 阈值 {GATE_THRESH:.0%} → "
+                       f"闸门通过。{ev}")
+        reasons.append(f"② 动作：按计划买入 {planned:.0f} 元（≈1 手）；"
+                       f"待投现金 {pending:.0f} 元一并补入。" if pending > 0 else
+                       f"② 动作：按计划买入 {planned:.0f} 元（≈1 手）。")
+
+    stance = "站上" if ma5_above else "跌破"
+    hold = "已有仓位继续持有（月线只管去留，不管新钱）" if ma5_above \
+        else "月线视角为空仓区，已有仓位按纪律处理"
+    reasons.append(f"③ 持仓层面：价格{stance} 5 月线"
+                   f"（{ma5_close:.3f} vs {ma5_value:.3f}）→ {hold}。")
+    if target_pos is not None:
+        reasons.append(f"④ 波动率：60 日年化 {vol60:.1%}，"
+                       f"25% 目标仓位上限 {target_pos:.0%}"
+                       f"（{'无降仓要求' if target_pos >= 1 else '需降仓'}）。")
+    reasons.append("⑤ 明日复验：每日 20:00 数据更新后重新判定本卡。")
+
+    return {
+        "code": code, "name": name, "day": str(day), "close": close,
+        "premium": premium, "gate": gate, "planned": planned,
+        "pending": pending, "ma5_above": ma5_above,
+        "vol60": vol60, "target_pos": target_pos,
+        "reasoning": reasons,
+    }

@@ -80,6 +80,7 @@ uv run python scripts/serve.py --once
 uv run python scripts/serve.py --catchup
 
 # 可视化看板（FastAPI + Vue3/ECharts，生产形态单端口）
+# 四页：今日决策（推理链）/ 深度分析（溢价分桶证据）/ 历史复盘（策略对比+定投）/ 影子盘
 uv run python scripts/api.py --port 8321            # http://localhost:8321
 
 # 前端开发（Vite 热更新，/api 代理到 8321）

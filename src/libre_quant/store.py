@@ -321,10 +321,36 @@ def signal_history(conn, code: str) -> list[tuple]:
         return cur.fetchall()
 
 
+def load_prices(conn, code: str) -> tuple[list[date], list[float], list[float]]:
+    """(days, raw_close, adj_close) 升序；adj 缺失回退 raw。"""
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT day, close, COALESCE(adj_close, close) FROM price "
+            "WHERE code = %s ORDER BY day", (code,))
+        rows = cur.fetchall()
+    return ([r[0] for r in rows], [float(r[1]) for r in rows],
+            [float(r[2]) for r in rows])
+
+
+def load_navs(conn, code: str) -> dict[date, float]:
+    """nav_day → nav 全量。"""
+    with conn.cursor() as cur:
+        cur.execute("SELECT nav_day, nav FROM nav WHERE code = %s", (code,))
+        return {r[0]: float(r[1]) for r in cur.fetchall()}
+
+
+def load_premiums(conn, code: str) -> dict[date, float]:
+    """day → premium 全量（premium 物化表）。"""
+    with conn.cursor() as cur:
+        cur.execute("SELECT day, premium FROM premium WHERE code = %s", (code,))
+        return {r[0]: float(r[1]) for r in cur.fetchall()}
+
+
 __all__ = [
     "SCHEMA_SQL", "connect", "init_db",
     "upsert_prices", "upsert_navs", "refresh_premium",
-    "load_closes", "premium_latest",
+    "load_closes", "load_prices", "load_navs", "load_premiums",
+    "premium_latest",
     "signal_upsert", "shadow_state_before", "shadow_upsert",
     "shadow_history", "signal_history",
     "known_nav_for_day", "premium_rows", "get_asset",

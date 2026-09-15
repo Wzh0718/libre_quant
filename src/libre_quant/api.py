@@ -14,11 +14,16 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
-from fastapi.staticfiles import StaticFiles
 
 from libre_quant.config import PROJECT_ROOT
 
 DIST = PROJECT_ROOT / "frontend" / "dist"
+
+
+def _name_of(code: str) -> str:
+    from libre_quant.universe import UNIVERSE
+    a = UNIVERSE.get(code)
+    return a.name if a else code
 
 
 def create_app(*, with_scheduler: bool = False) -> FastAPI:
@@ -58,12 +63,117 @@ def create_app(*, with_scheduler: bool = False) -> FastAPI:
         finally:
             conn.close()
 
+    @app.get("/api/today")
+    def today(code: str = "159941") -> dict:
+        """今日决策卡 + 推理链 + 信号轨迹。"""
+        from libre_quant import store
+        from libre_quant.review import premium_analytics, today_decision
+        from scripts.dashboard import _vol60
+        from scripts.monthly_ma import month_series
+
+        conn = store.connect()
+        try:
+            days, raw, adj = store.load_prices(conn, code)
+            prem = store.load_premiums(conn, code)
+            keys, mcloses = month_series(days, adj)
+            i = len(mcloses) - 1
+            # 当前月仓位 = 上月末信号；展示用最近已完成月
+            ma5 = sum(mcloses[i - 4:i + 1]) / 5 if i >= 4 else None
+            day, close = days[-1], raw[-1]
+            p = prem.get(day)
+            gate_hist = store.shadow_history(conn, code, "gate")
+            pending = float(gate_hist[-1][2]) if gate_hist else 0.0
+            buckets = premium_analytics(days, adj, prem)["buckets"]
+            card = today_decision(
+                code=code, name=_name_of(code), day=day, close=close,
+                premium=p, planned=200.0, pending=pending,
+                ma5_above=(mcloses[i] > ma5) if ma5 else True,
+                ma5_close=mcloses[i], ma5_value=ma5 or 0.0,
+                vol60=_vol60(adj), buckets=buckets)
+            trail = [{"day": str(d), "premium": float(pr) if pr is not None else None,
+                      "gate": g, "planned": float(pl)}
+                     for d, pr, g, pl in store.signal_history(conn, code)][-20:]
+            card["trail"] = trail
+            return card
+        finally:
+            conn.close()
+
+    @app.get("/api/analysis")
+    def analysis(code: str = "159941") -> dict:
+        """深度分析：溢价全史序列 + 分桶前向收益 + 分布 + 价格vs净值。"""
+        from libre_quant import store
+        from libre_quant.review import premium_analytics
+
+        conn = store.connect()
+        try:
+            days, raw, adj = store.load_prices(conn, code)
+            prem = store.load_premiums(conn, code)
+            pa = premium_analytics(days, adj, prem)
+            win = [d for d in days if d in prem][-504:]
+            px0 = raw[days.index(win[0])] if win else 1.0
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT day, nav_used FROM premium WHERE code = %s "
+                    "AND day = ANY(%s) ORDER BY day", (code, win))
+                nav_map = dict(cur.fetchall())
+            nav0 = float(nav_map[win[0]]) if win else 1.0
+            return {
+                "code": code, "name": _name_of(code),
+                "prem_days": [str(d) for d in days if d in prem],
+                "prem_series": [prem[d] for d in days if d in prem],
+                "analytics": pa,
+                "win_days": [str(d) for d in win],
+                "px_norm": [raw[days.index(d)] / px0 * 100 for d in win],
+                "nav_norm": [float(nav_map[d]) / nav0 * 100 for d in win],
+            }
+        finally:
+            conn.close()
+
+    @app.get("/api/review")
+    def review(code: str = "159941") -> dict:
+        """历史复盘：四策略对比 + 净值曲线 + 分年 + 定投变体 XIRR。"""
+        from libre_quant import store
+        from libre_quant.config import get_settings
+        from libre_quant.review import dca_review, strategy_review
+        from scripts.monthly_ma import (
+            daily_positions, month_series, monthly_sig,
+        )
+
+        conn = store.connect()
+        try:
+            days, raw, adj = store.load_prices(conn, code)
+            prem = store.load_premiums(conn, code)
+            keys, mcloses = month_series(days, adj)
+            above = dict(zip(days, daily_positions(
+                days, keys, monthly_sig(keys, mcloses, 5))))
+            s = get_settings()
+            return {
+                "code": code, "name": _name_of(code),
+                "span": [str(days[0]), str(days[-1])],
+                **strategy_review(days, adj),
+                "dca": dca_review(days, adj, prem, above,
+                                  s.trading_fee_rate, s.trading_fee_min),
+            }
+        finally:
+            conn.close()
+
     @app.get("/api/health")
     def health() -> dict:
         return {"ok": True}
 
     if DIST.exists():
-        app.mount("/", StaticFiles(directory=DIST, html=True), name="web")
+        from fastapi import HTTPException
+        from fastapi.responses import FileResponse
+
+        @app.get("/{full_path:path}", include_in_schema=False)
+        def spa(full_path: str):
+            """SPA 托管：存在的文件直出，其余路径回退 index.html（前端路由）。"""
+            if full_path.startswith("api/"):
+                raise HTTPException(status_code=404)
+            f = DIST / full_path
+            if full_path and f.is_file():
+                return FileResponse(f)
+            return FileResponse(DIST / "index.html")
 
     return app
 
