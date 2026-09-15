@@ -19,7 +19,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 
 import requests
 
@@ -179,3 +179,39 @@ def fetch_closes(codes: list[str], day: date, **kw) -> dict[str, float]:
         except Exception:  # noqa: BLE001
             continue
     return out
+
+
+def fetch_daily_all(
+    code: str,
+    start: date,
+    end: date,
+    *,
+    session: requests.Session | None = None,
+    sleep: float = 0.2,
+) -> list[Bar]:
+    """取全区间日线（腾讯单次上限 640 根，按最早日期游标向前翻页）。
+
+    从 ``scripts/backtest.py`` 提升为库函数：回测与入库采集共用同一实现。
+    返回按日期升序的 :class:`Bar` 列表；区间早于上市日时返回上市后的数据。
+    """
+    import time
+
+    sess = session or requests.Session()
+    sess.headers.update({"User-Agent": _UA})
+    sess.trust_env = False
+
+    out: dict[date, Bar] = {}
+    cursor = end
+    while True:
+        bars = fetch_daily(code, start, cursor, session=sess)
+        if not bars:
+            break
+        before = len(out)
+        for b in bars:
+            out[b.day] = b
+        earliest = min(b.day for b in bars)
+        if len(out) == before or earliest <= start:
+            break
+        cursor = earliest - timedelta(days=1)
+        time.sleep(sleep)
+    return [out[d] for d in sorted(out)]

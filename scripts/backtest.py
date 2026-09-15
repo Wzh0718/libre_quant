@@ -17,14 +17,13 @@
 from __future__ import annotations
 
 import sys
-import time
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from libre_quant.data.quotes import Bar, fetch_daily  # noqa: E402
+from libre_quant.data.quotes import Bar, fetch_daily_all as fetch_all  # noqa: E402
 
 ETF = "515880"
 START = date(2019, 9, 1)
@@ -32,27 +31,6 @@ END = date(2026, 9, 11)
 
 COST_PER_SIDE = 0.0005   # 单边成本：佣金+滑点
 TRADING_DAYS = 252
-
-
-# ---------------------------------------------------------------- 数据抓取
-
-def fetch_all(code: str, start: date, end: date) -> list[Bar]:
-    """腾讯单次上限 640 根，需要按 end 游标往前翻页。"""
-    out: dict[date, Bar] = {}
-    cursor = end
-    while True:
-        bars = fetch_daily(code, start, cursor)
-        if not bars:
-            break
-        before = len(out)
-        for b in bars:
-            out[b.day] = b
-        earliest = min(b.day for b in bars)
-        if len(out) == before or earliest <= start:
-            break
-        cursor = earliest - timedelta(days=1)
-        time.sleep(0.2)
-    return [out[d] for d in sorted(out)]
 
 
 # ---------------------------------------------------------------- 指标
