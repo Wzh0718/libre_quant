@@ -11,7 +11,8 @@ import { assets, refreshAssets } from "../store";
 const plans = ref<PlanItem[]>([]);
 const form = ref({
   code: "159941", plan: "gate", kind: "paper", name: "",
-  start_day: "", daily: 200, gate: 5,
+  start_day: "", daily: undefined as number | undefined,
+  gate: 5,
 });
 const busy = ref(false);
 const err = ref<string | null>(null);
@@ -49,6 +50,7 @@ async function open() {
       start_day: form.value.start_day || undefined,
       daily: form.value.daily,
       gate: form.value.gate / 100,
+      name: form.value.name || undefined,
     });
     msg.value = `已开盘 #${r.id}（${form.value.kind === "paper" ? "模拟盘" : "实际盘"}）`;
     await load();
@@ -122,8 +124,8 @@ onMounted(async () => { await refreshAssets(); await load(); });
           <option value="real">实际盘</option>
         </select>
       </label>
-      <label class="muted">每日金额
-        <input v-model.number="form.daily" type="number" step="100"
+      <label class="muted">每日金额（元，你填）
+        <input v-model.number="form.daily" type="number" step="50" placeholder="例如 200"
                style="width:100%;background:var(--bg);color:var(--text);
                       border:1px solid var(--border);border-radius:6px;padding:6px" />
       </label>

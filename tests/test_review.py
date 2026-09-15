@@ -97,3 +97,41 @@ def test_today_decision_buy_path():
     text = "\n".join(card["reasoning"])
     assert "闸门通过" in text and "按计划买入 200 元" in text
     assert "跌破" in text
+
+
+def test_today_decision_without_user_amount_invents_nothing():
+    """未设置金额时：只陈述溢价状态，不得编造买入金额。"""
+    card = today_decision(
+        code="159941", name="纳指ETF广发", day=date(2026, 9, 15), close=1.624,
+        premium=0.1032, planned=None, pending=0.0,
+        ma5_above=True, ma5_close=1.653, ma5_value=1.605,
+        vol60=0.23, buckets=[])
+    text = "\n".join(card["reasoning"])
+    assert card["planned"] is None
+    assert "没有设置定投参数" in text
+    assert "200" not in text          # 绝不发明数字
+    assert "建议暂停" in text          # 状态陈述仍在
+
+
+def test_today_decision_uses_user_gate_threshold():
+    """阈值应来自用户配置（这里设 2%），而不是写死的 5%。"""
+    card = today_decision(
+        code="159941", name="纳指ETF广发", day=date(2026, 9, 15), close=1.624,
+        premium=0.03, planned=500.0, pending=0.0,
+        ma5_above=True, ma5_close=1.653, ma5_value=1.605,
+        vol60=0.23, buckets=[], gate=0.02)
+    assert card["gate"] == "pause"        # 3% > 用户阈值 2%
+    assert card["gate_threshold"] == 0.02
+    assert "500" in "\n".join(card["reasoning"])   # 用用户金额
+
+
+def test_decision_text_uses_user_threshold_not_hardcoded():
+    """推理链文案里的阈值必须跟随用户配置（回归：曾写死 5%）。"""
+    card = today_decision(
+        code="159941", name="纳指ETF广发", day=date(2026, 9, 15), close=1.624,
+        premium=0.03, planned=500.0, pending=0.0,
+        ma5_above=True, ma5_close=1.653, ma5_value=1.605,
+        vol60=0.23, buckets=[], gate=0.02)
+    text = "\n".join(card["reasoning"])
+    assert "阈值 2%" in text and "≤2%" in text
+    assert "阈值 5%" not in text and "≤5%" not in text

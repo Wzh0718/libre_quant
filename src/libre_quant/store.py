@@ -137,6 +137,15 @@ CREATE TABLE IF NOT EXISTS account_trade (
     UNIQUE (account_id, day, action, price, qty)
 );
 COMMENT ON TABLE account_trade IS '成交流水（模拟盘由方案推演写入，实际盘由用户录入）';
+
+CREATE TABLE IF NOT EXISTS user_plan (
+    id         INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+    code       TEXT NOT NULL,
+    daily      DOUBLE PRECISION NOT NULL,
+    gate       DOUBLE PRECISION NOT NULL DEFAULT 0.05,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+COMMENT ON TABLE user_plan IS '用户自己的定投参数（单行）：投多少、闸门阈值、主目标标的。系统不得自行发明金额';
 """
 
 
@@ -432,6 +441,26 @@ def upsert_asset_meta(conn, code: str, name: str, kind: str) -> None:
     conn.commit()
 
 
+def get_user_plan(conn):
+    """用户定投参数（单行）；未设置返回 None。"""
+    with conn.cursor() as cur:
+        cur.execute("SELECT code, daily, gate FROM user_plan WHERE id = 1")
+        return cur.fetchone()
+
+
+def set_user_plan(conn, code: str, daily: float, gate: float) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO user_plan (id, code, daily, gate) VALUES (1, %s, %s, %s)
+            ON CONFLICT (id) DO UPDATE SET
+                code = EXCLUDED.code, daily = EXCLUDED.daily,
+                gate = EXCLUDED.gate, updated_at = now()
+            """,
+            (code, daily, gate))
+    conn.commit()
+
+
 # ---------------------------------------------------------------- 我的盘
 
 def create_account(conn, name: str, kind: str, code: str, plan: str,
@@ -568,6 +597,7 @@ __all__ = [
     "load_closes", "load_prices", "load_series", "load_navs", "load_premiums",
     "upsert_macro", "load_macro", "upsert_intraday", "load_intraday",
     "upsert_asset_meta",
+    "get_user_plan", "set_user_plan",
     "create_account", "list_accounts", "get_account", "delete_account",
     "add_trade", "account_trades",
     "premium_latest",

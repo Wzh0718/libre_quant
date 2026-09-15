@@ -38,15 +38,30 @@ def _latest_price(conn, code: str):
         return cur.fetchone()
 
 
-def run_daily(conn, code: str = "159941", planned: float = 200.0) -> str:
-    """当日影子步进。返回当日决策串（供 serve 日志）。"""
+def run_daily(conn, code: str | None = None,
+              planned: float | None = None) -> str:
+    """当日影子步进。金额/阈值/标的来自**用户自己的参数**（user_plan）。
+
+    未设置参数时直接跳过——系统不替用户发明投入金额。
+    """
     s = get_settings()
+    plan = store.get_user_plan(conn)
+    if plan is None and (code is None or planned is None):
+        return "[shadow] 跳过：尚未设置定投参数（我的定投参数卡里填）"
+    if plan is not None:
+        code = code or plan[0]
+        if planned is None:
+            planned = float(plan[1])
+        gate_thresh = float(plan[2])
+    else:
+        gate_thresh = GATE_THRESH
+    code = code or "159941"
     day, close = _latest_price(conn, code)
     prem_rows = store.premium_latest(conn, code, 1)
     prem = float(prem_rows[0][2]) if prem_rows and prem_rows[0][0] == day else None
     nav_used = prem_rows[0][1] if prem_rows and prem_rows[0][0] == day else None
 
-    gate = gate_decision(prem)
+    gate = gate_decision(prem, gate_thresh)
     store.signal_upsert(conn, code, day, close, nav_used, prem, gate, planned)
 
     for arm in ("gate", "naive"):

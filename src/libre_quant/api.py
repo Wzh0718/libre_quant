@@ -122,12 +122,18 @@ def create_app(*, with_scheduler: bool = False) -> FastAPI:
             gate_hist = store.shadow_history(conn, code, "gate")
             pending = float(gate_hist[-1][2]) if gate_hist else 0.0
             buckets = premium_analytics(days, adj, prem)["buckets"]
+            # 用户自己的参数（未设置则不给具体金额，绝不硬编码）
+            plan = store.get_user_plan(conn)
+            planned = float(plan[1]) if plan else None
+            gate = float(plan[2]) if plan else None
             card = today_decision(
                 code=code, name=_name_of(code), day=day, close=close,
-                premium=p, planned=200.0, pending=pending,
+                premium=p, planned=planned, pending=pending,
                 ma5_above=(mcloses[i] > ma5) if ma5 else True,
                 ma5_close=mcloses[i], ma5_value=ma5 or 0.0,
-                vol60=_vol60(adj), buckets=buckets)
+                vol60=_vol60(adj), buckets=buckets, gate=gate)
+            card["plan_configured"] = plan is not None
+            card["user_gate"] = gate
             trail = [{"day": str(d), "premium": float(pr) if pr is not None else None,
                       "gate": g, "planned": float(pl)}
                      for d, pr, g, pl in store.signal_history(conn, code)][-20:]
@@ -402,6 +408,42 @@ def create_app(*, with_scheduler: bool = False) -> FastAPI:
                           "in_universe": a is not None})
         items.sort(key=lambda x: (not x["in_universe"], x["code"]))
         return {"items": items}
+
+    # ------------------------------------------------ 我的定投参数（用户输入）
+
+    @app.get("/api/my-plan")
+    def my_plan() -> dict:
+        """用户自己的定投参数；未设置时 configured=false（系统不发明金额）。"""
+        from libre_quant import store
+
+        conn = store.connect()
+        try:
+            row = store.get_user_plan(conn)
+        finally:
+            conn.close()
+        if not row:
+            return {"configured": False}
+        return {"configured": True, "code": row[0], "daily": float(row[1]),
+                "gate": float(row[2])}
+
+    @app.put("/api/my-plan")
+    def set_my_plan(daily: float, code: str = "159941",
+                    gate: float = 0.05) -> dict:
+        """设置我的定投参数（投多少 / 闸门阈值 / 主目标标的）。"""
+        from fastapi import HTTPException
+
+        from libre_quant import store
+
+        if daily <= 0:
+            raise HTTPException(400, "每日金额必须大于 0")
+        if not (0 < gate < 1):
+            raise HTTPException(400, "闸门阈值需在 0~1 之间（如 0.05 = 5%）")
+        conn = store.connect()
+        try:
+            store.set_user_plan(conn, code, daily, gate)
+        finally:
+            conn.close()
+        return {"ok": True, "code": code, "daily": daily, "gate": gate}
 
     # ------------------------------------------------ 我的盘（模拟盘/实际盘）
 

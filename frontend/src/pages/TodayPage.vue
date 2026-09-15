@@ -1,14 +1,19 @@
 <script setup lang="ts">
 import { onMounted, ref, watch } from "vue";
 import {
-  fetchLevels, fetchLive, fetchToday, fmtPct, fmtYuan,
-  type LevelsData, type LiveData, type TodayCard,
+  fetchLevels, fetchLive, fetchMyPlan, fetchToday, fmtPct, fmtYuan, saveMyPlan,
+  type LevelsData, type LiveData, type MyPlan, type TodayCard,
 } from "../api";
 import { selectedCode } from "../store";
 
 const data = ref<TodayCard | null>(null);
 const live = ref<LiveData | null>(null);
 const levels = ref<LevelsData | null>(null);
+// 我的定投参数（用户输入，系统不发明金额）
+const plan = ref<MyPlan>({ configured: false });
+const planForm = ref({ daily: 0, gate: 5 });
+const planMsg = ref<string | null>(null);
+const planErr = ref<string | null>(null);
 const liveErr = ref<string | null>(null);
 const error = ref<string | null>(null);
 const loading = ref(true);
@@ -28,6 +33,11 @@ async function load() {
   try {
     data.value = await fetchToday(selectedCode.value);
     levels.value = await fetchLevels(selectedCode.value).catch(() => null);
+    plan.value = await fetchMyPlan();
+    if (plan.value.configured) {
+      planForm.value = { daily: plan.value.daily ?? 0,
+                         gate: (plan.value.gate ?? 0.05) * 100 };
+    }
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e);
   } finally {
@@ -35,6 +45,20 @@ async function load() {
   }
   void loadLive();
 }
+async function savePlan() {
+  planErr.value = null;
+  planMsg.value = null;
+  try {
+    await saveMyPlan({ daily: planForm.value.daily,
+                       code: selectedCode.value,
+                       gate: planForm.value.gate / 100 });
+    planMsg.value = "已保存";
+    await load();
+  } catch (e) {
+    planErr.value = e instanceof Error ? e.message : String(e);
+  }
+}
+
 onMounted(load);
 watch(selectedCode, load);
 </script>
@@ -45,6 +69,36 @@ watch(selectedCode, load);
     加载失败：{{ error }} <button class="badge badge-hold" style="cursor:pointer" @click="load">重试</button>
   </div>
   <template v-else-if="data">
+    <h2>我的定投参数（你自己填，系统不替你决定）</h2>
+    <div class="card">
+      <div style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap">
+        <label class="muted">每日金额（元）
+          <input v-model.number="planForm.daily" type="number" min="0" step="50"
+                 placeholder="例如 200"
+                 style="display:block;width:140px;background:var(--bg);color:var(--text);
+                        border:1px solid var(--border);border-radius:6px;padding:6px" />
+        </label>
+        <label class="muted">溢价闸门（%）
+          <input v-model.number="planForm.gate" type="number" min="0" max="99" step="0.5"
+                 style="display:block;width:120px;background:var(--bg);color:var(--text);
+                        border:1px solid var(--border);border-radius:6px;padding:6px" />
+        </label>
+        <button class="badge badge-buy" style="cursor:pointer" @click="savePlan">保存</button>
+        <span v-if="planMsg" class="muted">✅ {{ planMsg }}</span>
+        <span v-if="planErr" style="color:var(--red)">⚠️ {{ planErr }}</span>
+      </div>
+      <div class="muted" style="margin-top:8px;font-size:12px">
+        <template v-if="!plan.configured">
+          ⚠️ 你还没设置参数 —— 下面的决策卡只陈述溢价状态，<b>不会替你决定投多少</b>。
+        </template>
+        <template v-else>
+          当前：每交易日 <span class="num">{{ planForm.daily }}</span> 元 ·
+          闸门 <span class="num">{{ planForm.gate }}%</span> ·
+          主目标 <span class="num">{{ plan.code }}</span>
+        </template>
+      </div>
+    </div>
+
     <h2>今日决策 · {{ data.name }}（{{ data.code }}）· {{ data.day }}</h2>
     <div class="card">
       <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap">

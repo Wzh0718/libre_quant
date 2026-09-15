@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from libre_quant import store  # noqa: E402
 from libre_quant.config import PROJECT_ROOT  # noqa: E402
 from libre_quant.dashboard import render_html  # noqa: E402
-from libre_quant.shadow import gate_decision  # noqa: E402
+from libre_quant.shadow import GATE_THRESH, gate_decision  # noqa: E402
 from libre_quant.universe import onshore_etfs  # noqa: E402
 from scripts.monthly_ma import (  # noqa: E402
     daily_positions, month_series, monthly_sig,
@@ -68,6 +68,8 @@ def build_data(conn, hero: str = HERO) -> dict:
 
     prem_rows = store.premium_latest(conn, hero, 1)
     prem = float(prem_rows[0][2]) if prem_rows else None
+    user_plan = store.get_user_plan(conn)
+    planned = float(user_plan[1]) if user_plan else None
 
     # 影子 gate 臂待投现金
     gate_hist = store.shadow_history(conn, hero, "gate")
@@ -76,7 +78,8 @@ def build_data(conn, hero: str = HERO) -> dict:
     hero_d = {
         "code": hero, "name": "纳指ETF广发", "day": str(hday),
         "close": float(hclose), "premium": prem,
-        "gate": gate_decision(prem), "planned": 200.0, "pending": pending,
+        "gate": gate_decision(prem, float(user_plan[2]) if user_plan else GATE_THRESH),
+        "planned": planned, "pending": pending,
         "ma5": {"above": bool(above.get(days[-1], 0.0))},
         "vol60": vol, "target_pos": min(1.0, 0.25 / vol) if vol else None,
     }

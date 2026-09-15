@@ -186,11 +186,18 @@ def premium_analytics(days: list[date], adj: list[float],
 # ---------------------------------------------------------------- 今日决策
 
 def today_decision(*, code: str, name: str, day: date, close: float,
-                   premium: float | None, planned: float, pending: float,
-                   ma5_above: bool, ma5_close: float, ma5_value: float,
-                   vol60: float | None, buckets: list[dict]) -> dict:
-    """决策卡 + 推理链（每天投递的思路，全由数字生成）。"""
-    gate = gate_decision(premium)
+                   premium: float | None, planned: float | None,
+                   pending: float, ma5_above: bool, ma5_close: float,
+                   ma5_value: float, vol60: float | None,
+                   buckets: list[dict],
+                   gate: float | None = None) -> dict:
+    """决策卡 + 推理链。
+
+    ``planned``/``gate`` 来自**用户自己的参数**；未设置（None）时只做溢价状态
+    陈述，**不编造金额、不替用户决定投多少**。
+    """
+    thresh = GATE_THRESH if gate is None else gate
+    gate_state = gate_decision(premium, thresh)
     target_pos = min(1.0, 0.25 / vol60) if vol60 else None
 
     danger = next((b for b in buckets if b["is_danger"]), None)
@@ -202,14 +209,21 @@ def today_decision(*, code: str, name: str, day: date, close: float,
 
     reasons: list[str] = []
     p_s = f"{premium:+.2%}" if premium is not None else "n/a"
-    if gate == "pause":
-        reasons.append(f"① 溢价检查：当前 {p_s} > 阈值 {GATE_THRESH:.0%} → "
+    if planned is None:
+        # 用户还没设定投金额：只陈述状态，不发明数字
+        state = "高于阈值（建议暂停）" if gate_state == "pause" else "低于阈值（可买入）"
+        reasons.append(f"① 溢价检查：当前 {p_s}，{state}"
+                       f"（阈值 {thresh:.0%}）。{ev}")
+        reasons.append("② 你还**没有设置定投参数**（每日金额 / 阈值）——"
+                       "在上面「我的定投参数」里填上，系统才会给出具体动作。")
+    elif gate_state == "pause":
+        reasons.append(f"① 溢价检查：当前 {p_s} > 阈值 {thresh:.0%} → "
                        f"触发闸门，今日暂停买入。{ev}")
         reasons.append(f"② 动作：今日 {planned:.0f} 元转入待投现金"
-                       f"（累计 {pending:.0f} 元）；溢价回落 ≤{GATE_THRESH:.0%} "
+                       f"（累计 {pending:.0f} 元）；溢价回落 ≤{thresh:.0%} "
                        f"当日连本带额一次补回。")
     else:
-        reasons.append(f"① 溢价检查：当前 {p_s} ≤ 阈值 {GATE_THRESH:.0%} → "
+        reasons.append(f"① 溢价检查：当前 {p_s} ≤ 阈值 {thresh:.0%} → "
                        f"闸门通过。{ev}")
         reasons.append(f"② 动作：按计划买入 {planned:.0f} 元（≈1 手）；"
                        f"待投现金 {pending:.0f} 元一并补入。" if pending > 0 else
@@ -228,7 +242,8 @@ def today_decision(*, code: str, name: str, day: date, close: float,
 
     return {
         "code": code, "name": name, "day": str(day), "close": close,
-        "premium": premium, "gate": gate, "planned": planned,
+        "premium": premium, "gate": gate_state, "gate_threshold": thresh,
+        "planned": planned,
         "pending": pending, "ma5_above": ma5_above,
         "vol60": vol60, "target_pos": target_pos,
         "reasoning": reasons,

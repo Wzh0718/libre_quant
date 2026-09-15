@@ -70,8 +70,10 @@ export interface TodayCard {
   close: number;
   premium: number | null;
   gate: "buy" | "pause";
-  planned: number;
+  planned: number | null;
   pending: number;
+  gate_threshold?: number | null;
+  plan_configured?: boolean;
   ma5_above: boolean;
   vol60: number | null;
   target_pos: number | null;
@@ -452,3 +454,27 @@ export interface LevelsData {
 
 export const fetchLevels = (code: string) =>
   getJson<LevelsData>(`/api/levels?code=${code}`);
+
+// ---------------------------------------------------------------- 我的定投参数
+
+export interface MyPlan {
+  configured: boolean;
+  code?: string;
+  daily?: number;
+  gate?: number;
+}
+
+export const fetchMyPlan = () => getJson<MyPlan>("/api/my-plan");
+
+export async function saveMyPlan(q: {
+  daily: number; code: string; gate: number;
+}): Promise<void> {
+  const p = new URLSearchParams({
+    daily: String(q.daily), code: q.code, gate: String(q.gate),
+  });
+  const r = await fetch(`/api/my-plan?${p}`, { method: "PUT" });
+  if (!r.ok) {
+    const body = await r.json().catch(() => null);
+    throw new Error(errText(body, r.status));
+  }
+}
