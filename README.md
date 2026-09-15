@@ -69,6 +69,9 @@ uv run python scripts/us_lead_test.py
 
 # PCF 解析器离线自测
 uv run pytest -q
+
+# 全标的采集冒烟（不连数据库；入库见 docs/06 Phase 1a）
+uv run python scripts/ingest.py --dry-run
 ```
 
 配置（PostgreSQL / Tavily 等）用 pydantic-settings 统一管理：
@@ -93,14 +96,20 @@ libre_quant/
 │   ├── p0_spike.py              PCF 可得性验收
 │   ├── p0_weights.py            PCF + 价格 → 精确权重
 │   ├── us_lead_test.py          gap/intra 分离检验（可复用）
-│   ├── backtest.py              策略横向回测（无前视偏差）
-│   └── attribution.py           对数空间精确收益归因
-├── src/libre_quant/data/
-│   ├── pcf.py                   PCF 抓取 + 双格式解析
-│   ├── quotes.py                A 股行情（腾讯）
-│   ├── us.py                    美股行情（腾讯 + 新浪）
-│   └── news.py                  Tavily 检索（MCP）
-└── tests/fixtures/              离线 PCF 样本（两代格式）
+│   ├── backtest.py              策略回测（--etf 515880/513500/513100）
+│   ├── attribution.py           精确收益归因（--etf 同上）
+│   └── ingest.py                数据采集入库（--dry-run 冒烟 / --init-db）
+├── src/libre_quant/
+│   ├── config.py                pydantic-settings 集中配置（.env）
+│   ├── universe.py              投资宇宙注册表（类别/净值滞后/数据源）
+│   ├── store.py                 PostgreSQL 存储层 + 溢价写入时配对
+│   └── data/
+│       ├── pcf.py               PCF 抓取 + 双格式解析
+│       ├── quotes.py            A 股行情（腾讯，分页全历史）
+│       ├── nav.py               基金净值（东财，全历史）
+│       ├── us.py                美股行情（腾讯 + 新浪，SPY/QQQ 2001 起）
+│       └── news.py              Tavily 检索（MCP）
+└── tests/                       离线自测（解析器/配置/universe/溢价配对）
 ```
 
 ## 数据源一览
@@ -109,7 +118,8 @@ libre_quant/
 |---|---|---|
 | **PCF 持仓明细** | `m.gtfund.com/cochin/etf/download/...` | 核心数据，含每只股数 |
 | A 股行情 | `qt.gtimg.cn`（批量）/ `web.ifzq.gtimg.cn`（历史） | 一次请求多只，避免限流 |
-| 美股行情 | `qt.gtimg.cn`（批量）/ 新浪 `getDailyK`（1999 起） | — |
+| **基金净值** | `fund.eastmoney.com/pingzhongdata/{code}.js` | 三 ETF 全历史；溢价 = 价格÷最近已公布净值 |
+| 美股行情 | `qt.gtimg.cn`（批量）/ 新浪 `getDailyK`（2001 起） | SPY/QQQ 代理标普/纳指 |
 | 新闻检索 | Tavily MCP | ⚠️ 无历史快照，**无法回测** |
 
 细节与坑见 [`docs/02-data-sources.md`](docs/02-data-sources.md)。
