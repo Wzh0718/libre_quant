@@ -126,14 +126,22 @@ def create_app(*, with_scheduler: bool = False) -> FastAPI:
             plan = store.get_user_plan(conn)
             planned = float(plan[1]) if plan else None
             gate = float(plan[2]) if plan else None
+            trend_gate = float(plan[3]) if plan else 0.0
+            prem_7d_ago = (prem.get(days[len(days) - 8])
+                           if len(days) > 8 else None)
+            trend_7d = ((p - prem_7d_ago)
+                        if (p is not None and prem_7d_ago is not None) else None)
             card = today_decision(
                 code=code, name=_name_of(code), day=day, close=close,
                 premium=p, planned=planned, pending=pending,
                 ma5_above=(mcloses[i] > ma5) if ma5 else True,
                 ma5_close=mcloses[i], ma5_value=ma5 or 0.0,
-                vol60=_vol60(adj), buckets=buckets, gate=gate)
+                vol60=_vol60(adj), buckets=buckets, gate=gate,
+                trend_7d=trend_7d, trend_gate=trend_gate)
             card["plan_configured"] = plan is not None
             card["user_gate"] = gate
+            card["user_trend_gate"] = trend_gate
+            card["trend_7d"] = trend_7d
             trail = [{"day": str(d), "premium": float(pr) if pr is not None else None,
                       "gate": g, "planned": float(pl)}
                      for d, pr, g, pl in store.signal_history(conn, code)][-20:]
@@ -424,7 +432,61 @@ def create_app(*, with_scheduler: bool = False) -> FastAPI:
         if not row:
             return {"configured": False}
         return {"configured": True, "code": row[0], "daily": float(row[1]),
-                "gate": float(row[2])}
+                "gate": float(row[2]), "trend_gate": float(row[3])}
+
+    @app.get("/api/premium-trend")
+    def premium_trend(code: str = "159941") -> dict:
+        """溢价趋势：昨天 / 近 7 日 / 近 14 日的变化（比单点溢价更有信息量）。
+
+        附各窗口的历史前向收益（实证）：Δ7 分档的前向 5 日收益从
+        「大幅回落 +0.95%」单调降到「大幅上升 -0.60%」（docs/16）。
+        """
+        from libre_quant import store
+
+        conn = store.connect()
+        try:
+            days, raw, adj, src = store.load_series(conn, code)
+            if not days:
+                return {"code": code, "empty": True}
+            prem = store.load_premiums(conn, code)
+
+            def prem_at(back: int):
+                i = len(days) - 1 - back
+                return prem.get(days[i]) if i >= 0 else None
+
+            cur_p = prem_at(0)
+            rows = []
+            for back, label in ((1, "昨天"), (7, "近7日"), (14, "近14日")):
+                p0 = prem_at(back)
+                px0 = raw[len(days) - 1 - back] if len(days) > back else None
+                rows.append({
+                    "window": label, "back": back,
+                    "premium_then": p0,
+                    "premium_change": ((cur_p - p0)
+                                       if (cur_p is not None and p0 is not None)
+                                       else None),
+                    "price_then": px0,
+                    "price_change": ((raw[-1] / px0 - 1) if px0 else None),
+                })
+            ch7 = rows[1]["premium_change"]
+            bins = [(-9, -0.03, "溢价大幅回落 < -3pp", 0.00949, 230),
+                    (-0.03, -0.01, "回落 -3~-1pp", 0.00651, 552),
+                    (-0.01, 0.01, "基本持平", 0.00415, 1111),
+                    (0.01, 0.03, "上升 1~3pp", 0.00322, 565),
+                    (0.03, 9, "大幅上升 >3pp", -0.00600, 240)]
+            stat = None
+            if ch7 is not None:
+                for lo, hi, label, fwd5, n in bins:
+                    if lo <= ch7 < hi:
+                        stat = {"bucket": label, "n": n, "fwd5": fwd5}
+                        break
+            return {"code": code, "name": _name_of(code),
+                    "as_of": str(days[-1]), "premium_now": cur_p,
+                    "rows": rows, "stat": stat,
+                    "note": "溢价变化率比单点水平更有信息量（实证见 docs/16）；"
+                            "样本内统计，非预测"}
+        finally:
+            conn.close()
 
     @app.get("/api/my-plan/preview")
     def my_plan_preview(code: str = "159941", daily: float = 200.0,
@@ -487,7 +549,7 @@ def create_app(*, with_scheduler: bool = False) -> FastAPI:
 
     @app.put("/api/my-plan")
     def set_my_plan(daily: float, code: str = "159941",
-                    gate: float = 0.05) -> dict:
+                    gate: float = 0.05, trend_gate: float = 0.0) -> dict:
         """设置我的定投参数（投多少 / 闸门阈值 / 主目标标的）。"""
         from fastapi import HTTPException
 
@@ -497,12 +559,15 @@ def create_app(*, with_scheduler: bool = False) -> FastAPI:
             raise HTTPException(400, "每日金额必须大于 0")
         if not (0 < gate < 1):
             raise HTTPException(400, "闸门阈值需在 0~1 之间（如 0.05 = 5%）")
+        if trend_gate and not (0 < trend_gate < 1):
+            raise HTTPException(400, "趋势闸门需在 0~1 之间（0 = 关闭）")
         conn = store.connect()
         try:
-            store.set_user_plan(conn, code, daily, gate)
+            store.set_user_plan(conn, code, daily, gate, trend_gate)
         finally:
             conn.close()
-        return {"ok": True, "code": code, "daily": daily, "gate": gate}
+        return {"ok": True, "code": code, "daily": daily, "gate": gate,
+                "trend_gate": trend_gate}
 
     # ------------------------------------------------ 我的盘（模拟盘/实际盘）
 

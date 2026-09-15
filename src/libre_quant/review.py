@@ -190,7 +190,9 @@ def today_decision(*, code: str, name: str, day: date, close: float,
                    pending: float, ma5_above: bool, ma5_close: float,
                    ma5_value: float, vol60: float | None,
                    buckets: list[dict],
-                   gate: float | None = None) -> dict:
+                   gate: float | None = None,
+                   trend_7d: float | None = None,
+                   trend_gate: float = 0.0) -> dict:
     """决策卡 + 推理链。
 
     ``planned``/``gate`` 来自**用户自己的参数**；未设置（None）时只做溢价状态
@@ -198,6 +200,11 @@ def today_decision(*, code: str, name: str, day: date, close: float,
     """
     thresh = GATE_THRESH if gate is None else gate
     gate_state = gate_decision(premium, thresh)
+    # 溢价趋势闸门（用户可选）：近 7 日溢价上升超过阈值 → 也暂停
+    trend_hit = (trend_gate > 0 and trend_7d is not None
+                 and trend_7d > trend_gate)
+    if trend_hit:
+        gate_state = "pause"
     target_pos = min(1.0, 0.25 / vol60) if vol60 else None
 
     danger = next((b for b in buckets if b["is_danger"]), None)
@@ -216,6 +223,13 @@ def today_decision(*, code: str, name: str, day: date, close: float,
                        f"（阈值 {thresh:.0%}）。{ev}")
         reasons.append("② 你还**没有设置定投参数**（每日金额 / 阈值）——"
                        "在上面「我的定投参数」里填上，系统才会给出具体动作。")
+    elif trend_hit:
+        reasons.append(f"① 溢价趋势：近 7 日溢价上升 "
+                       f"{trend_7d:+.2%} > 趋势闸门 {trend_gate:.2%} → "
+                       f"暂停（拥挤加剧时前向收益为负：该档历史前向 5 日约 "
+                       f"-0.60%，docs/16）。")
+        reasons.append(f"② 动作：今日 {planned:.0f} 元转入待投现金"
+                       f"（累计 {pending:.0f} 元）。")
     elif gate_state == "pause":
         reasons.append(f"① 溢价检查：当前 {p_s} > 阈值 {thresh:.0%} → "
                        f"触发闸门，今日暂停买入。{ev}")
@@ -243,6 +257,7 @@ def today_decision(*, code: str, name: str, day: date, close: float,
     return {
         "code": code, "name": name, "day": str(day), "close": close,
         "premium": premium, "gate": gate_state, "gate_threshold": thresh,
+        "trend_7d": trend_7d, "trend_gate": trend_gate,
         "planned": planned,
         "pending": pending, "ma5_above": ma5_above,
         "vol60": vol60, "target_pos": target_pos,

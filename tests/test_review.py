@@ -135,3 +135,26 @@ def test_decision_text_uses_user_threshold_not_hardcoded():
     text = "\n".join(card["reasoning"])
     assert "阈值 2%" in text and "≤2%" in text
     assert "阈值 5%" not in text and "≤5%" not in text
+
+
+def test_trend_gate_pauses_on_rising_premium():
+    """趋势闸门：近 7 日溢价上升超过阈值 → 暂停，且文案说明实证依据。"""
+    card = today_decision(
+        code="159941", name="纳指ETF广发", day=date(2026, 9, 15), close=1.624,
+        premium=0.02, planned=500.0, pending=0.0,      # 水平没超 5%
+        ma5_above=True, ma5_close=1.653, ma5_value=1.605,
+        vol60=0.23, buckets=[], gate=0.05,
+        trend_7d=0.04, trend_gate=0.02)                # 但 7 日涨了 4pp
+    assert card["gate"] == "pause"
+    text = "\n".join(card["reasoning"])
+    assert "溢价趋势" in text and "docs/16" in text
+
+
+def test_trend_gate_disabled_by_default():
+    """trend_gate=0（默认关闭）时不因趋势暂停。"""
+    card = today_decision(
+        code="159941", name="纳指ETF广发", day=date(2026, 9, 15), close=1.624,
+        premium=0.02, planned=500.0, pending=0.0,
+        ma5_above=True, ma5_close=1.653, ma5_value=1.605,
+        vol60=0.23, buckets=[], gate=0.05, trend_7d=0.04, trend_gate=0.0)
+    assert card["gate"] == "buy"

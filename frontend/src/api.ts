@@ -462,15 +462,17 @@ export interface MyPlan {
   code?: string;
   daily?: number;
   gate?: number;
+  trend_gate?: number;
 }
 
 export const fetchMyPlan = () => getJson<MyPlan>("/api/my-plan");
 
 export async function saveMyPlan(q: {
-  daily: number; code: string; gate: number;
+  daily: number; code: string; gate: number; trend_gate?: number;
 }): Promise<void> {
   const p = new URLSearchParams({
     daily: String(q.daily), code: q.code, gate: String(q.gate),
+    trend_gate: String(q.trend_gate ?? 0),
   });
   const r = await fetch(`/api/my-plan?${p}`, { method: "PUT" });
   if (!r.ok) {
@@ -508,3 +510,28 @@ export const previewPlan = (q: {
   });
   return getJson<PreviewResult>(`/api/my-plan/preview?${p}`);
 };
+
+// ---------------------------------------------------------------- 溢价趋势
+
+export interface TrendRow {
+  window: string;
+  back: number;
+  premium_then: number | null;
+  premium_change: number | null;
+  price_then: number | null;
+  price_change: number | null;
+}
+
+export interface PremiumTrend {
+  code: string;
+  name: string;
+  as_of: string;
+  premium_now: number | null;
+  rows: TrendRow[];
+  stat: { bucket: string; n: number; fwd5: number } | null;
+  note: string;
+  empty?: boolean;
+}
+
+export const fetchPremiumTrend = (code: string) =>
+  getJson<PremiumTrend>(`/api/premium-trend?code=${code}`);

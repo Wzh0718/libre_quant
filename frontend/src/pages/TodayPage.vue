@@ -1,19 +1,20 @@
 <script setup lang="ts">
 import { onMounted, ref, watch } from "vue";
 import {
-  fetchLevels, fetchLive, fetchMyPlan, fetchToday, fmtPct, fmtYuan,
-  previewPlan, saveMyPlan,
-  type LevelsData, type LiveData, type MyPlan, type PreviewResult,
-  type TodayCard,
+  fetchLevels, fetchLive, fetchMyPlan, fetchPremiumTrend, fetchToday, fmtPct,
+  fmtYuan, previewPlan, saveMyPlan,
+  type LevelsData, type LiveData, type MyPlan, type PremiumTrend,
+  type PreviewResult, type TodayCard,
 } from "../api";
 import { selectedCode } from "../store";
 
 const data = ref<TodayCard | null>(null);
 const live = ref<LiveData | null>(null);
 const levels = ref<LevelsData | null>(null);
+const trend = ref<PremiumTrend | null>(null);
 // 我的定投参数（用户输入，系统不发明金额）
 const plan = ref<MyPlan>({ configured: false });
-const planForm = ref({ daily: 0, gate: 5 });
+const planForm = ref({ daily: 0, gate: 5, trendGate: 0 });
 const planMsg = ref<string | null>(null);
 const planErr = ref<string | null>(null);
 const preview = ref<PreviewResult | null>(null);
@@ -37,10 +38,12 @@ async function load() {
   try {
     data.value = await fetchToday(selectedCode.value);
     levels.value = await fetchLevels(selectedCode.value).catch(() => null);
+    trend.value = await fetchPremiumTrend(selectedCode.value).catch(() => null);
     plan.value = await fetchMyPlan();
     if (plan.value.configured) {
       planForm.value = { daily: plan.value.daily ?? 0,
-                         gate: (plan.value.gate ?? 0.05) * 100 };
+                         gate: (plan.value.gate ?? 0.05) * 100,
+                         trendGate: (plan.value.trend_gate ?? 0) * 100 };
     }
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e);
@@ -69,7 +72,8 @@ async function savePlan() {
   try {
     await saveMyPlan({ daily: planForm.value.daily,
                        code: selectedCode.value,
-                       gate: planForm.value.gate / 100 });
+                       gate: planForm.value.gate / 100,
+                       trend_gate: planForm.value.trendGate / 100 });
     planMsg.value = "已保存";
     await load();
   } catch (e) {
@@ -103,6 +107,16 @@ watch(selectedCode, load);
           <span style="display:block;max-width:260px;font-size:11px;line-height:1.45;margin-top:4px">
             场内价高于净值的百分比。超过此值当天不买、钱攒着，回落当次补投。
             建议 5%（唯一有三标的实证支持的阈值）。
+          </span>
+        </label>
+        <label class="muted">趋势闸门（pp，0=关）
+          <input v-model.number="planForm.trendGate" type="number" min="0" max="99"
+                 step="0.5" placeholder="0"
+                 style="display:block;width:130px;background:var(--bg);color:var(--text);
+                        border:1px solid var(--border);border-radius:6px;padding:6px" />
+          <span style="display:block;max-width:240px;font-size:11px;line-height:1.45;margin-top:4px">
+            近 7 日溢价上升超过此值（百分点）也暂停。实测能把买入均价溢价压到 1/7，
+            但期末收益几乎不变（现金拖累抵消）。
           </span>
         </label>
         <button class="badge badge-buy" style="cursor:pointer" @click="savePlan">保存</button>
@@ -178,6 +192,37 @@ watch(selectedCode, load);
       <div class="muted" style="margin-top:8px;font-size:12px">
         {{ live?.note ?? "盘中实时（收盘前参考；日终以入库收盘价为准）" }}
       </div>
+    </div>
+
+    <h2>溢价趋势（变化率比单点水平更有信息量）</h2>
+    <div class="card">
+      <template v-if="trend && !trend.empty">
+        <table>
+          <thead><tr><th>窗口</th><th>当时溢价</th><th>溢价变化</th>
+            <th>当时价格</th><th>价格涨跌</th></tr></thead>
+          <tbody>
+            <tr v-for="r in trend.rows" :key="r.window">
+              <td>{{ r.window }}</td>
+              <td class="num">{{ fmtPct(r.premium_then) }}</td>
+              <td class="num"
+                  :style="(r.premium_change ?? 0) >= 0 ? 'color:var(--red)' : 'color:var(--green)'">
+                {{ r.premium_change != null && r.premium_change >= 0 ? "+" : "" }}{{ fmtPct(r.premium_change) }}
+                <span class="muted" style="font-size:11px">（升=拥挤加剧）</span>
+              </td>
+              <td class="num">{{ r.price_then != null ? r.price_then.toFixed(3) : "—" }}</td>
+              <td class="num"
+                  :style="(r.price_change ?? 0) >= 0 ? 'color:var(--green)' : 'color:var(--red)'">
+                {{ fmtPct(r.price_change) }}</td>
+            </tr>
+          </tbody>
+        </table>
+        <div v-if="trend.stat" class="muted" style="margin-top:8px;font-size:12px">
+          当前处于「{{ trend.stat.bucket }}」档（历史 {{ trend.stat.n }} 天）
+          → 该档历史前向 5 日 {{ fmtPct(trend.stat.fwd5) }}（实证，非预测）
+          · {{ trend.note }}
+        </div>
+      </template>
+      <div v-else class="muted">暂无溢价趋势数据</div>
     </div>
 
     <h2>价格参考位（数据算出，非预测）</h2>

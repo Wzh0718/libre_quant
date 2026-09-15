@@ -120,7 +120,8 @@ libre_quant/
 │   ├── 12-strategy-optimization.md  定投可优化空间实测（投放层/持仓层）
 │   ├── 13-asset-search.md       标的检索层：任意基金/股票代码 → 拉历史 → 跑盘
 │   ├── 14-my-accounts.md        我的盘：模拟盘/实际盘/未来 3 天预案
-│   └── 15-price-levels.md       价格触发方案实测（买入/卖出预期价：能算，但不该当指令）
+│   ├── 15-price-levels.md       价格触发方案实测（买入/卖出预期价：能算，但不该当指令）
+│   └── 16-premium-trend.md      溢价趋势（变化率比水平更有信息量）+ 可选趋势闸门
 ├── scripts/
 │   ├── p0_spike.py              PCF 可得性验收
 │   ├── p0_weights.py            PCF + 价格 → 精确权重

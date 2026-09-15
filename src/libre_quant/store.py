@@ -195,6 +195,7 @@ def init_db(conn) -> None:
     with conn.cursor() as cur:
         cur.execute(SCHEMA_SQL)
     conn.commit()
+    migrate_schema(conn)
 
 
 def upsert_prices(
@@ -441,23 +442,39 @@ def upsert_asset_meta(conn, code: str, name: str, kind: str) -> None:
     conn.commit()
 
 
-def get_user_plan(conn):
-    """用户定投参数（单行）；未设置返回 None。"""
+def migrate_schema(conn) -> None:
+    """轻量加列（幂等），用于已有库平滑升级。"""
     with conn.cursor() as cur:
-        cur.execute("SELECT code, daily, gate FROM user_plan WHERE id = 1")
+        cur.execute("ALTER TABLE user_plan ADD COLUMN IF NOT EXISTS "
+                    "trend_gate DOUBLE PRECISION NOT NULL DEFAULT 0")
+    conn.commit()
+
+
+def get_user_plan(conn):
+    """用户定投参数（单行）；未设置返回 None。
+
+    返回 ``(code, daily, gate, trend_gate)``。trend_gate > 0 时启用
+    「溢价趋势闸门」：近 7 日溢价上升超过该值（小数，如 0.02=2pp）则暂停。
+    """
+    with conn.cursor() as cur:
+        cur.execute("SELECT code, daily, gate, trend_gate "
+                    "FROM user_plan WHERE id = 1")
         return cur.fetchone()
 
 
-def set_user_plan(conn, code: str, daily: float, gate: float) -> None:
+def set_user_plan(conn, code: str, daily: float, gate: float,
+                  trend_gate: float = 0.0) -> None:
     with conn.cursor() as cur:
         cur.execute(
             """
-            INSERT INTO user_plan (id, code, daily, gate) VALUES (1, %s, %s, %s)
+            INSERT INTO user_plan (id, code, daily, gate, trend_gate)
+            VALUES (1, %s, %s, %s, %s)
             ON CONFLICT (id) DO UPDATE SET
                 code = EXCLUDED.code, daily = EXCLUDED.daily,
-                gate = EXCLUDED.gate, updated_at = now()
+                gate = EXCLUDED.gate, trend_gate = EXCLUDED.trend_gate,
+                updated_at = now()
             """,
-            (code, daily, gate))
+            (code, daily, gate, trend_gate))
     conn.commit()
 
 
@@ -597,7 +614,7 @@ __all__ = [
     "load_closes", "load_prices", "load_series", "load_navs", "load_premiums",
     "upsert_macro", "load_macro", "upsert_intraday", "load_intraday",
     "upsert_asset_meta",
-    "get_user_plan", "set_user_plan",
+    "get_user_plan", "set_user_plan", "migrate_schema",
     "create_account", "list_accounts", "get_account", "delete_account",
     "add_trade", "account_trades",
     "premium_latest",
