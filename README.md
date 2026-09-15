@@ -1,6 +1,7 @@
 # libre_quant
 
-个人量化研究。当前载体：**515880 通信ETF（国泰基金）**。
+个人量化研究。投资宇宙：**515880 通信ETF（国泰）+ 513500 标普500 / 513100 纳指100（QDII ETF）**。
+515880 是目前唯一完成深度研究的标的；宇宙扩展计划见 [`docs/06-multi-asset-plan.md`](docs/06-multi-asset-plan.md)。
 
 ## 这个项目在做什么
 
@@ -70,11 +71,11 @@ uv run python scripts/us_lead_test.py
 uv run pytest -q
 ```
 
-Tavily 检索需要 token，放 `.env`：
+配置（PostgreSQL / Tavily 等）用 pydantic-settings 统一管理：
 
 ```bash
-echo 'TAVILY_TOKEN=<your-token>' > .env   # 已进 .gitignore
-uv run python -m libre_quant.data.news "光模块 800G 最新进展"
+cp .env.example .env   # 然后填写；.env 已进 .gitignore
+uv run python -m libre_quant.data.news "光模块 800G 最新进展"   # 需 TAVILY_TOKEN
 ```
 
 ## 项目结构
@@ -84,11 +85,16 @@ libre_quant/
 ├── docs/
 │   ├── 01-conversation-log.md   研究过程与决策记录
 │   ├── 02-data-sources.md       数据源技术档案（全部实测）
-│   └── 03-methodology.md        因子验证方法论
+│   ├── 03-methodology.md        因子验证方法论
+│   ├── 04-backtest-results.md   10 策略横向回测 + 过拟合检测
+│   ├── 05-attribution.md        精确收益归因（净择时全负的修正）
+│   └── 06-multi-asset-plan.md   多标的宇宙计划（515880 + QDII）
 ├── scripts/
 │   ├── p0_spike.py              PCF 可得性验收
 │   ├── p0_weights.py            PCF + 价格 → 精确权重
-│   └── us_lead_test.py          gap/intra 分离检验（可复用）
+│   ├── us_lead_test.py          gap/intra 分离检验（可复用）
+│   ├── backtest.py              策略横向回测（无前视偏差）
+│   └── attribution.py           对数空间精确收益归因
 ├── src/libre_quant/data/
 │   ├── pcf.py                   PCF 抓取 + 双格式解析
 │   ├── quotes.py                A 股行情（腾讯）
@@ -110,10 +116,8 @@ libre_quant/
 
 ## 待办
 
-1. **成分股日间调仓 diff** —— PCF 独有信息，最可能真有 edge
-2. **候选因子批量过筛** —— 宽度、分化度、份额变化、溢价率、相对强度
-3. **记录/归因系统** —— 调策略的前提设施
-4. **Tavily 每日归档** —— 从今天起攒可回测数据
+→ 已按多标的宇宙重排至 [`docs/06-multi-asset-plan.md`](docs/06-multi-asset-plan.md)
+（Phase 0 架构去单标的化 → 数据资产 → 策略复检 → 组合层 → walk-forward）。
 
 ## 边界声明
 
