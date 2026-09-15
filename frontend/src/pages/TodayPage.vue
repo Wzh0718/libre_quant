@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { onMounted, ref, watch } from "vue";
 import {
-  fetchLevels, fetchLive, fetchMyPlan, fetchToday, fmtPct, fmtYuan, saveMyPlan,
-  type LevelsData, type LiveData, type MyPlan, type TodayCard,
+  fetchLevels, fetchLive, fetchMyPlan, fetchToday, fmtPct, fmtYuan,
+  previewPlan, saveMyPlan,
+  type LevelsData, type LiveData, type MyPlan, type PreviewResult,
+  type TodayCard,
 } from "../api";
 import { selectedCode } from "../store";
 
@@ -14,6 +16,8 @@ const plan = ref<MyPlan>({ configured: false });
 const planForm = ref({ daily: 0, gate: 5 });
 const planMsg = ref<string | null>(null);
 const planErr = ref<string | null>(null);
+const preview = ref<PreviewResult | null>(null);
+const previewErr = ref<string | null>(null);
 const liveErr = ref<string | null>(null);
 const error = ref<string | null>(null);
 const loading = ref(true);
@@ -45,6 +49,20 @@ async function load() {
   }
   void loadLive();
 }
+async function runPreview() {
+  previewErr.value = null;
+  preview.value = null;
+  try {
+    preview.value = await previewPlan({
+      code: selectedCode.value,
+      daily: planForm.value.daily,
+      gate: planForm.value.gate / 100,
+    });
+  } catch (e) {
+    previewErr.value = e instanceof Error ? e.message : String(e);
+  }
+}
+
 async function savePlan() {
   planErr.value = null;
   planMsg.value = null;
@@ -84,9 +102,23 @@ watch(selectedCode, load);
                         border:1px solid var(--border);border-radius:6px;padding:6px" />
         </label>
         <button class="badge badge-buy" style="cursor:pointer" @click="savePlan">保存</button>
+        <button class="badge badge-hold" style="cursor:pointer" @click="runPreview">试算（近3年）</button>
         <span v-if="planMsg" class="muted">✅ {{ planMsg }}</span>
         <span v-if="planErr" style="color:var(--red)">⚠️ {{ planErr }}</span>
       </div>
+      <div v-if="preview" class="muted" style="margin-top:10px;font-size:12px">
+        <b>试算</b>（{{ preview.start }} 起，只读不改配置）：
+        投入 <span class="num">{{ fmtYuan(preview.invested) }}</span> 元 →
+        市值 <span class="num">{{ fmtYuan(preview.value) }}</span> 元 ·
+        涨跌 <span class="num"
+          :style="(preview.pnl_pct ?? 0) >= 0 ? 'color:var(--green)' : 'color:var(--red)'">
+          {{ fmtPct(preview.pnl_pct) }}</span> ·
+        XIRR {{ fmtPct(preview.xirr) }} ·
+        暂停 {{ preview.pauses }}/{{ preview.planned_days }} 天 ·
+        买入均价溢价 {{ fmtPct(preview.avg_buy_premium) }} ·
+        待投现金 {{ fmtYuan(preview.cash) }} 元
+      </div>
+      <div v-if="previewErr" style="margin-top:8px;color:var(--red)">⚠️ {{ previewErr }}</div>
       <div class="muted" style="margin-top:8px;font-size:12px">
         <template v-if="!plan.configured">
           ⚠️ 你还没设置参数 —— 下面的决策卡只陈述溢价状态，<b>不会替你决定投多少</b>。

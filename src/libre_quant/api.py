@@ -426,6 +426,65 @@ def create_app(*, with_scheduler: bool = False) -> FastAPI:
         return {"configured": True, "code": row[0], "daily": float(row[1]),
                 "gate": float(row[2])}
 
+    @app.get("/api/my-plan/preview")
+    def my_plan_preview(code: str = "159941", daily: float = 200.0,
+                        gate: float = 0.05, plan: str = "gate",
+                        start: str | None = None,
+                        years: float = 3.0) -> dict:
+        """**参数试算**：按给定参数在历史上跑一遍，让你看到后果再决定。
+
+        只读不写——不会改动任何配置。
+        """
+        from datetime import date as _date
+        from datetime import timedelta as _td
+
+        from fastapi import HTTPException
+
+        from libre_quant import store
+        from libre_quant.accounts import (
+            Trade, derive_paper_trades, planned_flows, value_trades,
+        )
+
+        if daily <= 0:
+            raise HTTPException(400, "每日金额必须大于 0")
+        conn = store.connect()
+        try:
+            days, raw, adj, src = store.load_series(conn, code)
+            if not days:
+                raise HTTPException(400, "该标的无数据")
+            prem = store.load_premiums(conn, code)
+            sd = (_date.fromisoformat(start) if start
+                  else days[-1] - _td(days=int(365 * years)))
+            sd = max(sd, days[0])
+            params = {"daily": daily, "gate": gate}
+            trades = derive_paper_trades(plan, params, days, raw, prem,
+                                         start=sd)
+            flows = planned_flows(plan, params, days, sd)
+            cash = max(0.0, sum(a for _, a in flows)
+                       - sum(t.amount for t in trades))
+            v = value_trades(trades, dict(zip(days, raw)), days[-1],
+                             cash=cash, flows=flows)
+            buy_prems = [prem[t.day] for t in trades
+                         if t.day in prem and t.action == "buy"]
+            # 未按计划买入的天数（闸门暂停）
+            pauses = sum(
+                1 for d, _a in flows
+                if not any(t.day == d for t in trades))
+            return {
+                "code": code, "plan": plan, "start": str(sd),
+                "daily": daily, "gate": gate,
+                "invested": v["invested"], "value": v["value"],
+                "pnl": v["pnl"], "pnl_pct": v["pnl_pct"],
+                "xirr": v["xirr"], "cash": cash,
+                "buys": len(trades), "planned_days": len(flows),
+                "pauses": pauses,
+                "avg_buy_premium": (sum(buy_prems) / len(buy_prems)
+                                    if buy_prems else None),
+                "note": "只读试算，不写入任何配置",
+            }
+        finally:
+            conn.close()
+
     @app.put("/api/my-plan")
     def set_my_plan(daily: float, code: str = "159941",
                     gate: float = 0.05) -> dict:

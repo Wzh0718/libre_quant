@@ -478,3 +478,33 @@ export async function saveMyPlan(q: {
     throw new Error(errText(body, r.status));
   }
 }
+
+// ---------------------------------------------------------------- 参数试算（只读）
+
+export interface PreviewResult {
+  code: string;
+  start: string;
+  daily: number;
+  gate: number;
+  invested: number;
+  value: number;
+  pnl: number;
+  pnl_pct: number | null;
+  xirr: number | null;
+  cash: number;
+  buys: number;
+  planned_days: number;
+  pauses: number;
+  avg_buy_premium: number | null;
+  note: string;
+}
+
+export const previewPlan = (q: {
+  code: string; daily: number; gate: number; years?: number;
+}) => {
+  const p = new URLSearchParams({
+    code: q.code, daily: String(q.daily), gate: String(q.gate),
+    years: String(q.years ?? 3),
+  });
+  return getJson<PreviewResult>(`/api/my-plan/preview?${p}`);
+};
