@@ -451,6 +451,10 @@ def migrate_schema(conn) -> None:
                     "dip_threshold DOUBLE PRECISION NOT NULL DEFAULT 0")
         cur.execute("ALTER TABLE user_plan ADD COLUMN IF NOT EXISTS "
                     "dip_mult DOUBLE PRECISION NOT NULL DEFAULT 0")
+        cur.execute("ALTER TABLE user_plan ADD COLUMN IF NOT EXISTS "
+                    "surge_threshold DOUBLE PRECISION NOT NULL DEFAULT 0")
+        cur.execute("ALTER TABLE user_plan ADD COLUMN IF NOT EXISTS "
+                    "surge_factor DOUBLE PRECISION NOT NULL DEFAULT 1")
     conn.commit()
 
 
@@ -463,28 +467,39 @@ def get_user_plan(conn):
     """
     with conn.cursor() as cur:
         cur.execute("SELECT code, daily, gate, trend_gate, dip_threshold, "
-                    "dip_mult FROM user_plan WHERE id = 1")
+                    "dip_mult, surge_threshold, surge_factor "
+                    "FROM user_plan WHERE id = 1")
         return cur.fetchone()
 
 
 def set_user_plan(conn, code: str, daily: float, gate: float,
                   trend_gate: float = 0.0, dip_threshold: float = 0.0,
-                  dip_mult: float = 0.0) -> None:
-    """dip_threshold/dip_mult：价格 7 日跌超过阈值时，额外加投 daily×mult。"""
+                  dip_mult: float = 0.0, surge_threshold: float = 1.0,
+                  surge_factor: float = 1.0) -> None:
+    """**价格驱动的投放规则**（都是本 ETF 的场内价格）：
+
+    * dip_threshold/dip_mult：7 日跌幅 ≥ |阈值| → 加投 ``daily×mult``；
+    * surge_threshold/surge_factor：7 日涨幅 ≥ 阈值 → 当日金额乘 ``factor``
+      （0 = 暂停，0.5 = 减半，1 = 不干预）。
+    """
     with conn.cursor() as cur:
         cur.execute(
             """
             INSERT INTO user_plan (id, code, daily, gate, trend_gate,
-                                   dip_threshold, dip_mult)
-            VALUES (1, %s, %s, %s, %s, %s, %s)
+                                   dip_threshold, dip_mult,
+                                   surge_threshold, surge_factor)
+            VALUES (1, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (id) DO UPDATE SET
                 code = EXCLUDED.code, daily = EXCLUDED.daily,
                 gate = EXCLUDED.gate, trend_gate = EXCLUDED.trend_gate,
                 dip_threshold = EXCLUDED.dip_threshold,
                 dip_mult = EXCLUDED.dip_mult,
+                surge_threshold = EXCLUDED.surge_threshold,
+                surge_factor = EXCLUDED.surge_factor,
                 updated_at = now()
             """,
-            (code, daily, gate, trend_gate, dip_threshold, dip_mult))
+            (code, daily, gate, trend_gate, dip_threshold, dip_mult,
+             surge_threshold, surge_factor))
     conn.commit()
 
 

@@ -122,7 +122,8 @@ libre_quant/
 │   ├── 14-my-accounts.md        我的盘：模拟盘/实际盘/未来 3 天预案
 │   ├── 15-price-levels.md       价格触发方案实测（买入/卖出预期价：能算，但不该当指令）
 │   ├── 16-premium-trend.md      溢价趋势（变化率比水平更有信息量）+ 可选趋势闸门
-│   └── 17-signal-scan.md        信号扫描（价格涨跌 vs 溢价）+ 回撤加码（唯一双改善规则）
+│   ├── 17-signal-scan.md        信号扫描（价格涨跌 vs 溢价）+ 回撤加码（唯一双改善规则）
+│   └── 18-price-driven.md       价格驱动决策（场内价格双向规则 + 今日指令合成）
 ├── scripts/
 │   ├── p0_spike.py              PCF 可得性验收
 │   ├── p0_weights.py            PCF + 价格 → 精确权重

@@ -72,6 +72,11 @@ export interface TodayCard {
   gate: "buy" | "pause";
   planned: number | null;
   pending: number;
+  final_action?: string;
+  final_amount?: number | null;
+  mom_7d?: number | null;
+  dip_hit?: boolean;
+  surge_hit?: boolean;
   gate_threshold?: number | null;
   plan_configured?: boolean;
   ma5_above: boolean;
@@ -465,6 +470,8 @@ export interface MyPlan {
   trend_gate?: number;
   dip_threshold?: number;
   dip_mult?: number;
+  surge_threshold?: number;
+  surge_factor?: number;
 }
 
 export const fetchMyPlan = () => getJson<MyPlan>("/api/my-plan");
@@ -472,12 +479,15 @@ export const fetchMyPlan = () => getJson<MyPlan>("/api/my-plan");
 export async function saveMyPlan(q: {
   daily: number; code: string; gate: number; trend_gate?: number;
   dip_threshold?: number; dip_mult?: number;
+  surge_threshold?: number; surge_factor?: number;
 }): Promise<void> {
   const p = new URLSearchParams({
     daily: String(q.daily), code: q.code, gate: String(q.gate),
     trend_gate: String(q.trend_gate ?? 0),
     dip_threshold: String(q.dip_threshold ?? 0),
     dip_mult: String(q.dip_mult ?? 0),
+    surge_threshold: String(q.surge_threshold ?? 1),
+    surge_factor: String(q.surge_factor ?? 1),
   });
   const r = await fetch(`/api/my-plan?${p}`, { method: "PUT" });
   if (!r.ok) {

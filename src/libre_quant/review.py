@@ -195,7 +195,9 @@ def today_decision(*, code: str, name: str, day: date, close: float,
                    trend_gate: float = 0.0,
                    mom_7d: float | None = None,
                    dip_threshold: float = 0.0,
-                   dip_mult: float = 0.0) -> dict:
+                   dip_mult: float = 0.0,
+                   surge_threshold: float = 1.0,
+                   surge_factor: float = 1.0) -> dict:
     """决策卡 + 推理链。
 
     ``planned``/``gate`` 来自**用户自己的参数**；未设置（None）时只做溢价状态
@@ -211,6 +213,9 @@ def today_decision(*, code: str, name: str, day: date, close: float,
     # 回撤加码（可选）：价格 7 日跌幅超过阈值 → 用额外储蓄加投（不留现金）
     dip_hit = (dip_mult > 0 and dip_threshold < 0 and mom_7d is not None
                and mom_7d <= dip_threshold)
+    # 价格冲高（同一信号的反面）：涨多了少投/不投
+    surge_hit = (surge_factor < 1 and surge_threshold < 1 and mom_7d is not None
+                 and mom_7d >= surge_threshold)
     target_pos = min(1.0, 0.25 / vol60) if vol60 else None
 
     danger = next((b for b in buckets if b["is_danger"]), None)
@@ -254,10 +259,14 @@ def today_decision(*, code: str, name: str, day: date, close: float,
         else "月线视角为空仓区，已有仓位按纪律处理"
     if dip_hit and gate_state == "buy" and planned:
         reasons.append(
-            f"③ 回撤加码触发：价格 7 日 {mom_7d:+.2%} ≤ 阈值 "
-            f"{dip_threshold:.2%} → 今日加投 "
-            f"{planned * dip_mult:.0f} 元（额外储蓄，不是预留现金）；"
-            f"该档历史前向 5 日约 +1.61%（docs/17）。")
+            f"③ 价格驱动·加码：本 ETF 7 日 {mom_7d:+.2%} ≤ 阈值 "
+            f"{dip_threshold:.2%} → 加投 {planned * dip_mult:.0f} 元"
+            f"（额外储蓄，不是预留现金）；该档历史前向 5 日约 +1.61%（docs/17）。")
+    elif surge_hit and gate_state == "buy" and planned:
+        reasons.append(
+            f"③ 价格驱动·减码：本 ETF 7 日 {mom_7d:+.2%} ≥ 阈值 "
+            f"{surge_threshold:.2%} → 当日金额 ×{surge_factor:g}"
+            f"（涨多了少买，该档历史前向 5 日约 -0.12%）。")
     reasons.append(f"③ 持仓层面：价格{stance} 5 月线"
                    f"（{ma5_close:.3f} vs {ma5_value:.3f}）→ {hold}。")
     if target_pos is not None:
@@ -266,8 +275,23 @@ def today_decision(*, code: str, name: str, day: date, close: float,
                        f"（{'无降仓要求' if target_pos >= 1 else '需降仓'}）。")
     reasons.append("⑤ 明日复验：每日 20:00 数据更新后重新判定本卡。")
 
+    # 今日最终指令（价格与溢价规则的合成）
+    if planned is None:
+        final_amount, final_action = None, "未设置参数"
+    elif gate_state == "pause":
+        final_amount, final_action = 0.0, "暂停买入"
+    else:
+        amt = planned
+        if dip_hit:
+            amt = planned * (1 + dip_mult)
+        elif surge_hit:
+            amt = planned * surge_factor
+        final_amount, final_action = amt, "买入"
+
     return {
         "code": code, "name": name, "day": str(day), "close": close,
+        "final_action": final_action, "final_amount": final_amount,
+        "surge_hit": surge_hit,
         "premium": premium, "gate": gate_state, "gate_threshold": thresh,
         "trend_7d": trend_7d, "trend_gate": trend_gate,
         "mom_7d": mom_7d, "dip_hit": dip_hit,

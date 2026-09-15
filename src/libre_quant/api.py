@@ -129,6 +129,8 @@ def create_app(*, with_scheduler: bool = False) -> FastAPI:
             trend_gate = float(plan[3]) if plan else 0.0
             dip_threshold = float(plan[4]) if plan else 0.0
             dip_mult = float(plan[5]) if plan else 0.0
+            surge_threshold = float(plan[6]) if plan else 1.0
+            surge_factor = float(plan[7]) if plan else 1.0
             mom_7d = ((adj[-1] / adj[-8] - 1) if len(adj) > 8 else None)
             prem_7d_ago = (prem.get(days[len(days) - 8])
                            if len(days) > 8 else None)
@@ -142,7 +144,8 @@ def create_app(*, with_scheduler: bool = False) -> FastAPI:
                 vol60=_vol60(adj), buckets=buckets, gate=gate,
                 trend_7d=trend_7d, trend_gate=trend_gate,
                 mom_7d=mom_7d, dip_threshold=dip_threshold,
-                dip_mult=dip_mult)
+                dip_mult=dip_mult, surge_threshold=surge_threshold,
+                surge_factor=surge_factor)
             card["plan_configured"] = plan is not None
             card["user_gate"] = gate
             card["user_trend_gate"] = trend_gate
@@ -438,7 +441,9 @@ def create_app(*, with_scheduler: bool = False) -> FastAPI:
             return {"configured": False}
         return {"configured": True, "code": row[0], "daily": float(row[1]),
                 "gate": float(row[2]), "trend_gate": float(row[3]),
-                "dip_threshold": float(row[4]), "dip_mult": float(row[5])}
+                "dip_threshold": float(row[4]), "dip_mult": float(row[5]),
+                "surge_threshold": float(row[6]),
+                "surge_factor": float(row[7])}
 
     @app.get("/api/premium-trend")
     def premium_trend(code: str = "159941") -> dict:
@@ -557,7 +562,9 @@ def create_app(*, with_scheduler: bool = False) -> FastAPI:
     def set_my_plan(daily: float, code: str = "159941",
                     gate: float = 0.05, trend_gate: float = 0.0,
                     dip_threshold: float = 0.0,
-                    dip_mult: float = 0.0) -> dict:
+                    dip_mult: float = 0.0,
+                    surge_threshold: float = 1.0,
+                    surge_factor: float = 1.0) -> dict:
         """设置我的定投参数（投多少 / 闸门阈值 / 主目标标的）。"""
         from fastapi import HTTPException
 
@@ -573,15 +580,19 @@ def create_app(*, with_scheduler: bool = False) -> FastAPI:
             raise HTTPException(400, "加码倍数需在 0~10（0 = 关闭）")
         if dip_threshold > 0:
             raise HTTPException(400, "回撤阈值应为负数（如 -0.05 表示跌 5%）")
+        if not (0 <= surge_factor <= 1):
+            raise HTTPException(400, "冲高系数需在 0~1（1 = 不干预）")
         conn = store.connect()
         try:
             store.set_user_plan(conn, code, daily, gate, trend_gate,
-                                dip_threshold, dip_mult)
+                                dip_threshold, dip_mult, surge_threshold,
+                                surge_factor)
         finally:
             conn.close()
         return {"ok": True, "code": code, "daily": daily, "gate": gate,
                 "trend_gate": trend_gate, "dip_threshold": dip_threshold,
-                "dip_mult": dip_mult}
+                "dip_mult": dip_mult, "surge_threshold": surge_threshold,
+                "surge_factor": surge_factor}
 
     # ------------------------------------------------ 我的盘（模拟盘/实际盘）
 

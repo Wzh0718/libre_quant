@@ -15,7 +15,7 @@ const trend = ref<PremiumTrend | null>(null);
 // 我的定投参数（用户输入，系统不发明金额）
 const plan = ref<MyPlan>({ configured: false });
 const planForm = ref({ daily: 0, gate: 5, trendGate: 0, dipThreshold: 0,
-                       dipMult: 0 });
+                       dipMult: 0, surgeThreshold: 0, surgeFactor: 1 });
 const planMsg = ref<string | null>(null);
 const planErr = ref<string | null>(null);
 const preview = ref<PreviewResult | null>(null);
@@ -46,7 +46,9 @@ async function load() {
                          gate: (plan.value.gate ?? 0.05) * 100,
                          trendGate: (plan.value.trend_gate ?? 0) * 100,
                          dipThreshold: (plan.value.dip_threshold ?? 0) * 100,
-                         dipMult: plan.value.dip_mult ?? 0 };
+                         dipMult: plan.value.dip_mult ?? 0,
+                         surgeThreshold: (plan.value.surge_threshold ?? 1) * 100,
+                         surgeFactor: plan.value.surge_factor ?? 1 };
     }
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e);
@@ -78,7 +80,9 @@ async function savePlan() {
                        gate: planForm.value.gate / 100,
                        trend_gate: planForm.value.trendGate / 100,
                        dip_threshold: planForm.value.dipThreshold / 100,
-                       dip_mult: planForm.value.dipMult });
+                       dip_mult: planForm.value.dipMult,
+                       surge_threshold: planForm.value.surgeThreshold / 100,
+                       surge_factor: planForm.value.surgeFactor });
     planMsg.value = "已保存";
     await load();
   } catch (e) {
@@ -130,6 +134,22 @@ watch(selectedCode, load);
             收益(+0.11pp)与回撤(-1.8pp)的规则（docs/17）。
           </span>
         </label>
+        <label class="muted">冲高减码：涨超（%）
+          <input v-model.number="planForm.surgeThreshold" type="number" min="0" max="50"
+                 step="1" placeholder="0=关"
+                 style="display:block;width:120px;background:var(--bg);color:var(--text);
+                        border:1px solid var(--border);border-radius:6px;padding:6px" />
+        </label>
+        <label class="muted">冲高系数（×每日）
+          <input v-model.number="planForm.surgeFactor" type="number" min="0" max="1"
+                 step="0.1" placeholder="1=关"
+                 style="display:block;width:120px;background:var(--bg);color:var(--text);
+                        border:1px solid var(--border);border-radius:6px;padding:6px" />
+          <span style="display:block;max-width:250px;font-size:11px;line-height:1.45;margin-top:4px">
+            价格 7 日涨超阈值 → 当日金额乘此系数（0=暂停，0.5=减半）。
+            双侧价格规则实测最优（docs/18）。
+          </span>
+        </label>
         <label class="muted">趋势闸门（pp，0=关）
           <input v-model.number="planForm.trendGate" type="number" min="0" max="99"
                  step="0.5" placeholder="0"
@@ -178,16 +198,35 @@ watch(selectedCode, load);
       </div>
     </div>
 
-    <h2>今日决策 · {{ data.name }}（{{ data.code }}）· {{ data.day }}</h2>
+    <h2>今日指令 · {{ data.name }}（{{ data.code }}）· {{ data.day }}</h2>
     <div class="card">
-      <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap">
+      <div style="display:flex;gap:20px;align-items:center;flex-wrap:wrap">
         <div>
-          <span class="big num">{{ fmtPct(data.premium) }}</span>
-          <span class="muted"> 当前溢价</span>
+          <div class="muted">今日动作</div>
+          <span class="big num"
+                :style="data.final_action === '买入' ? 'color:var(--green)'
+                        : 'color:var(--red)'">{{ data.final_action }}</span>
+          <span v-if="data.final_amount" class="big num" style="margin-left:8px">
+            {{ fmtYuan(data.final_amount) }} 元</span>
         </div>
-        <span v-if="data.gate === 'pause'" class="badge badge-pause">暂停买入</span>
-        <span v-else class="badge badge-buy">正常买入 {{ fmtYuan(data.planned) }} 元</span>
-        <span class="muted">待投现金 {{ fmtYuan(data.pending) }} 元</span>
+        <div>
+          <div class="muted">场内价格</div>
+          <span class="num" style="font-size:20px">{{ data.close.toFixed(3) }}</span>
+          <div class="num muted" style="font-size:12px">
+            7 日 {{ fmtPct(data.mom_7d ?? null) }} · 当前溢价 {{ fmtPct(data.premium) }}</div>
+        </div>
+        <div>
+          <div class="muted">规则命中</div>
+          <div style="font-size:13px">
+            <span v-if="data.dip_hit" class="badge badge-buy">价格加码</span>
+            <span v-else-if="data.surge_hit" class="badge badge-hold">价格减码</span>
+            <span v-else class="badge badge-hold">价格正常</span>
+            <span v-if="data.gate === 'pause'" class="badge badge-pause"
+                  style="margin-left:6px">溢价闸门</span>
+            <span v-else class="badge badge-buy" style="margin-left:6px">溢价通过</span>
+          </div>
+        </div>
+        <div class="muted">待投现金 {{ fmtYuan(data.pending) }} 元</div>
       </div>
     </div>
 

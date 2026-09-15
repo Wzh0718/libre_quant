@@ -171,7 +171,9 @@ def test_dip_bonus_triggers_on_price_drop():
     assert card["dip_hit"] is True
     assert card["dip_amount"] == 600.0        # 200 × 3
     text = "\n".join(card["reasoning"])
-    assert "回撤加码触发" in text and "docs/17" in text
+    assert "价格驱动·加码" in text and "docs/17" in text
+    assert card["final_action"] == "买入"
+    assert card["final_amount"] == 800.0      # 200 + 200×3
 
 
 def test_dip_bonus_off_by_default():
@@ -181,3 +183,28 @@ def test_dip_bonus_off_by_default():
         ma5_above=True, ma5_close=1.653, ma5_value=1.605,
         vol60=0.23, buckets=[], gate=0.05, mom_7d=-0.20)
     assert card["dip_hit"] is False and card["dip_amount"] == 0.0
+
+
+def test_surge_rule_reduces_amount():
+    """价格冲高：7 日涨超阈值 → 当日金额减半（价格驱动的另一半）。"""
+    card = today_decision(
+        code="159941", name="纳指ETF广发", day=date(2026, 9, 15), close=1.624,
+        premium=0.01, planned=200.0, pending=0.0,
+        ma5_above=True, ma5_close=1.653, ma5_value=1.605,
+        vol60=0.23, buckets=[], gate=0.05,
+        mom_7d=0.07, surge_threshold=0.05, surge_factor=0.5)
+    assert card["surge_hit"] is True
+    assert card["final_amount"] == 100.0       # 200 × 0.5
+    assert "价格驱动·减码" in "\n".join(card["reasoning"])
+
+
+def test_final_instruction_premium_gate_wins():
+    """溢价闸门暂停时，最终指令必须是 0 元（价格规则不覆盖闸门）。"""
+    card = today_decision(
+        code="159941", name="纳指ETF广发", day=date(2026, 9, 15), close=1.624,
+        premium=0.1032, planned=200.0, pending=0.0,
+        ma5_above=True, ma5_close=1.653, ma5_value=1.605,
+        vol60=0.23, buckets=[], gate=0.05,
+        mom_7d=-0.07, dip_threshold=-0.05, dip_mult=3.0)
+    assert card["gate"] == "pause"
+    assert card["final_action"] == "暂停买入" and card["final_amount"] == 0.0
