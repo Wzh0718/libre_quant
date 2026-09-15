@@ -463,16 +463,21 @@ export interface MyPlan {
   daily?: number;
   gate?: number;
   trend_gate?: number;
+  dip_threshold?: number;
+  dip_mult?: number;
 }
 
 export const fetchMyPlan = () => getJson<MyPlan>("/api/my-plan");
 
 export async function saveMyPlan(q: {
   daily: number; code: string; gate: number; trend_gate?: number;
+  dip_threshold?: number; dip_mult?: number;
 }): Promise<void> {
   const p = new URLSearchParams({
     daily: String(q.daily), code: q.code, gate: String(q.gate),
     trend_gate: String(q.trend_gate ?? 0),
+    dip_threshold: String(q.dip_threshold ?? 0),
+    dip_mult: String(q.dip_mult ?? 0),
   });
   const r = await fetch(`/api/my-plan?${p}`, { method: "PUT" });
   if (!r.ok) {

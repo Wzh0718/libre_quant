@@ -158,3 +158,26 @@ def test_trend_gate_disabled_by_default():
         ma5_above=True, ma5_close=1.653, ma5_value=1.605,
         vol60=0.23, buckets=[], gate=0.05, trend_7d=0.04, trend_gate=0.0)
     assert card["gate"] == "buy"
+
+
+def test_dip_bonus_triggers_on_price_drop():
+    """回撤加码：价格 7 日跌幅超过阈值 → 推理链给出加码金额与实证依据。"""
+    card = today_decision(
+        code="159941", name="纳指ETF广发", day=date(2026, 9, 15), close=1.624,
+        premium=0.01, planned=200.0, pending=0.0,
+        ma5_above=True, ma5_close=1.653, ma5_value=1.605,
+        vol60=0.23, buckets=[], gate=0.05,
+        mom_7d=-0.07, dip_threshold=-0.05, dip_mult=3.0)
+    assert card["dip_hit"] is True
+    assert card["dip_amount"] == 600.0        # 200 × 3
+    text = "\n".join(card["reasoning"])
+    assert "回撤加码触发" in text and "docs/17" in text
+
+
+def test_dip_bonus_off_by_default():
+    card = today_decision(
+        code="159941", name="纳指ETF广发", day=date(2026, 9, 15), close=1.624,
+        premium=0.01, planned=200.0, pending=0.0,
+        ma5_above=True, ma5_close=1.653, ma5_value=1.605,
+        vol60=0.23, buckets=[], gate=0.05, mom_7d=-0.20)
+    assert card["dip_hit"] is False and card["dip_amount"] == 0.0

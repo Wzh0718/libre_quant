@@ -121,7 +121,8 @@ libre_quant/
 │   ├── 13-asset-search.md       标的检索层：任意基金/股票代码 → 拉历史 → 跑盘
 │   ├── 14-my-accounts.md        我的盘：模拟盘/实际盘/未来 3 天预案
 │   ├── 15-price-levels.md       价格触发方案实测（买入/卖出预期价：能算，但不该当指令）
-│   └── 16-premium-trend.md      溢价趋势（变化率比水平更有信息量）+ 可选趋势闸门
+│   ├── 16-premium-trend.md      溢价趋势（变化率比水平更有信息量）+ 可选趋势闸门
+│   └── 17-signal-scan.md        信号扫描（价格涨跌 vs 溢价）+ 回撤加码（唯一双改善规则）
 ├── scripts/
 │   ├── p0_spike.py              PCF 可得性验收
 │   ├── p0_weights.py            PCF + 价格 → 精确权重
@@ -133,6 +134,7 @@ libre_quant/
 │   ├── monthly_ma.py            5月线择时复检（--n 可调）
 │   ├── dca.py                   定投复检（频率/溢价暂停/佣金敏感性）
 │   ├── shadow.py                影子盘：每日步进 + 晋升检查单（--report）
+│   ├── signal_scan.py           信号扫描：候选变量对前向收益的预测力对比
 │   ├── dashboard.py             静态看板兜底（build_data 是 API/看板共用数据源）
 │   ├── api.py                   FastAPI + 看板托管入口（--with-scheduler 单容器形态）
 │   ├── replay.py                逐日定投复盘引擎（四变体 + 每日流水账）

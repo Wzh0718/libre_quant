@@ -192,7 +192,10 @@ def today_decision(*, code: str, name: str, day: date, close: float,
                    buckets: list[dict],
                    gate: float | None = None,
                    trend_7d: float | None = None,
-                   trend_gate: float = 0.0) -> dict:
+                   trend_gate: float = 0.0,
+                   mom_7d: float | None = None,
+                   dip_threshold: float = 0.0,
+                   dip_mult: float = 0.0) -> dict:
     """决策卡 + 推理链。
 
     ``planned``/``gate`` 来自**用户自己的参数**；未设置（None）时只做溢价状态
@@ -205,6 +208,9 @@ def today_decision(*, code: str, name: str, day: date, close: float,
                  and trend_7d > trend_gate)
     if trend_hit:
         gate_state = "pause"
+    # 回撤加码（可选）：价格 7 日跌幅超过阈值 → 用额外储蓄加投（不留现金）
+    dip_hit = (dip_mult > 0 and dip_threshold < 0 and mom_7d is not None
+               and mom_7d <= dip_threshold)
     target_pos = min(1.0, 0.25 / vol60) if vol60 else None
 
     danger = next((b for b in buckets if b["is_danger"]), None)
@@ -246,6 +252,12 @@ def today_decision(*, code: str, name: str, day: date, close: float,
     stance = "站上" if ma5_above else "跌破"
     hold = "已有仓位继续持有（月线只管去留，不管新钱）" if ma5_above \
         else "月线视角为空仓区，已有仓位按纪律处理"
+    if dip_hit and gate_state == "buy" and planned:
+        reasons.append(
+            f"③ 回撤加码触发：价格 7 日 {mom_7d:+.2%} ≤ 阈值 "
+            f"{dip_threshold:.2%} → 今日加投 "
+            f"{planned * dip_mult:.0f} 元（额外储蓄，不是预留现金）；"
+            f"该档历史前向 5 日约 +1.61%（docs/17）。")
     reasons.append(f"③ 持仓层面：价格{stance} 5 月线"
                    f"（{ma5_close:.3f} vs {ma5_value:.3f}）→ {hold}。")
     if target_pos is not None:
@@ -258,6 +270,8 @@ def today_decision(*, code: str, name: str, day: date, close: float,
         "code": code, "name": name, "day": str(day), "close": close,
         "premium": premium, "gate": gate_state, "gate_threshold": thresh,
         "trend_7d": trend_7d, "trend_gate": trend_gate,
+        "mom_7d": mom_7d, "dip_hit": dip_hit,
+        "dip_amount": (planned * dip_mult) if (dip_hit and planned) else 0.0,
         "planned": planned,
         "pending": pending, "ma5_above": ma5_above,
         "vol60": vol60, "target_pos": target_pos,

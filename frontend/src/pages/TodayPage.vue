@@ -14,7 +14,8 @@ const levels = ref<LevelsData | null>(null);
 const trend = ref<PremiumTrend | null>(null);
 // 我的定投参数（用户输入，系统不发明金额）
 const plan = ref<MyPlan>({ configured: false });
-const planForm = ref({ daily: 0, gate: 5, trendGate: 0 });
+const planForm = ref({ daily: 0, gate: 5, trendGate: 0, dipThreshold: 0,
+                       dipMult: 0 });
 const planMsg = ref<string | null>(null);
 const planErr = ref<string | null>(null);
 const preview = ref<PreviewResult | null>(null);
@@ -43,7 +44,9 @@ async function load() {
     if (plan.value.configured) {
       planForm.value = { daily: plan.value.daily ?? 0,
                          gate: (plan.value.gate ?? 0.05) * 100,
-                         trendGate: (plan.value.trend_gate ?? 0) * 100 };
+                         trendGate: (plan.value.trend_gate ?? 0) * 100,
+                         dipThreshold: (plan.value.dip_threshold ?? 0) * 100,
+                         dipMult: plan.value.dip_mult ?? 0 };
     }
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e);
@@ -73,7 +76,9 @@ async function savePlan() {
     await saveMyPlan({ daily: planForm.value.daily,
                        code: selectedCode.value,
                        gate: planForm.value.gate / 100,
-                       trend_gate: planForm.value.trendGate / 100 });
+                       trend_gate: planForm.value.trendGate / 100,
+                       dip_threshold: planForm.value.dipThreshold / 100,
+                       dip_mult: planForm.value.dipMult });
     planMsg.value = "已保存";
     await load();
   } catch (e) {
@@ -107,6 +112,22 @@ watch(selectedCode, load);
           <span style="display:block;max-width:260px;font-size:11px;line-height:1.45;margin-top:4px">
             场内价高于净值的百分比。超过此值当天不买、钱攒着，回落当次补投。
             建议 5%（唯一有三标的实证支持的阈值）。
+          </span>
+        </label>
+        <label class="muted">回撤加码：跌超（%）
+          <input v-model.number="planForm.dipThreshold" type="number" min="-50" max="0"
+                 step="1" placeholder="0=关"
+                 style="display:block;width:120px;background:var(--bg);color:var(--text);
+                        border:1px solid var(--border);border-radius:6px;padding:6px" />
+        </label>
+        <label class="muted">加码倍数（×每日）
+          <input v-model.number="planForm.dipMult" type="number" min="0" max="10"
+                 step="0.5" placeholder="0=关"
+                 style="display:block;width:130px;background:var(--bg);color:var(--text);
+                        border:1px solid var(--border);border-radius:6px;padding:6px" />
+          <span style="display:block;max-width:250px;font-size:11px;line-height:1.45;margin-top:4px">
+            价格 7 日跌超阈值 → 额外加投（用储蓄，不留现金）。实测唯一同时改善
+            收益(+0.11pp)与回撤(-1.8pp)的规则（docs/17）。
           </span>
         </label>
         <label class="muted">趋势闸门（pp，0=关）

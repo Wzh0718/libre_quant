@@ -447,34 +447,44 @@ def migrate_schema(conn) -> None:
     with conn.cursor() as cur:
         cur.execute("ALTER TABLE user_plan ADD COLUMN IF NOT EXISTS "
                     "trend_gate DOUBLE PRECISION NOT NULL DEFAULT 0")
+        cur.execute("ALTER TABLE user_plan ADD COLUMN IF NOT EXISTS "
+                    "dip_threshold DOUBLE PRECISION NOT NULL DEFAULT 0")
+        cur.execute("ALTER TABLE user_plan ADD COLUMN IF NOT EXISTS "
+                    "dip_mult DOUBLE PRECISION NOT NULL DEFAULT 0")
     conn.commit()
 
 
 def get_user_plan(conn):
     """用户定投参数（单行）；未设置返回 None。
 
-    返回 ``(code, daily, gate, trend_gate)``。trend_gate > 0 时启用
-    「溢价趋势闸门」：近 7 日溢价上升超过该值（小数，如 0.02=2pp）则暂停。
+    返回 ``(code, daily, gate, trend_gate, dip_threshold, dip_mult)``。
+    trend_gate > 0：近 7 日溢价上升超过该值则暂停；
+    dip_threshold < 0 且 dip_mult > 0：价格 7 日跌幅超过 |阈值| 时加投。
     """
     with conn.cursor() as cur:
-        cur.execute("SELECT code, daily, gate, trend_gate "
-                    "FROM user_plan WHERE id = 1")
+        cur.execute("SELECT code, daily, gate, trend_gate, dip_threshold, "
+                    "dip_mult FROM user_plan WHERE id = 1")
         return cur.fetchone()
 
 
 def set_user_plan(conn, code: str, daily: float, gate: float,
-                  trend_gate: float = 0.0) -> None:
+                  trend_gate: float = 0.0, dip_threshold: float = 0.0,
+                  dip_mult: float = 0.0) -> None:
+    """dip_threshold/dip_mult：价格 7 日跌超过阈值时，额外加投 daily×mult。"""
     with conn.cursor() as cur:
         cur.execute(
             """
-            INSERT INTO user_plan (id, code, daily, gate, trend_gate)
-            VALUES (1, %s, %s, %s, %s)
+            INSERT INTO user_plan (id, code, daily, gate, trend_gate,
+                                   dip_threshold, dip_mult)
+            VALUES (1, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (id) DO UPDATE SET
                 code = EXCLUDED.code, daily = EXCLUDED.daily,
                 gate = EXCLUDED.gate, trend_gate = EXCLUDED.trend_gate,
+                dip_threshold = EXCLUDED.dip_threshold,
+                dip_mult = EXCLUDED.dip_mult,
                 updated_at = now()
             """,
-            (code, daily, gate, trend_gate))
+            (code, daily, gate, trend_gate, dip_threshold, dip_mult))
     conn.commit()
 
 
