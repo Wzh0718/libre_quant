@@ -14,6 +14,9 @@ def test_defaults_without_env():
     s = Settings(_env_file=None)  # 显式忽略 .env，只看进程环境
     assert str(s.database_url).startswith("postgresql://")
     assert s.tavily_token is None
+    # 用户券商实际口径（万0.5 / 最低0.1元）作为项目默认
+    assert s.trading_fee_rate == 0.00005
+    assert s.trading_fee_min == 0.1
 
 
 def test_env_var_override(monkeypatch):

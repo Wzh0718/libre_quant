@@ -33,6 +33,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from libre_quant.config import get_settings  # noqa: E402
 from libre_quant.data.nav import fetch_nav_history  # noqa: E402
 from libre_quant.data.quotes import fetch_daily_all as fetch_all  # noqa: E402
 from libre_quant.store import premium_rows  # noqa: E402
@@ -41,11 +42,12 @@ from scripts.monthly_ma import (  # noqa: E402
     daily_positions, month_series, monthly_sig,
 )
 
-RATE = 0.0002  # 佣金费率（万2）
+#: 对照组佣金口径（多数券商默认）：万2 费率 + 最低 5 元
+CONTRAST_RATE, CONTRAST_MIN = 0.0002, 5.0
 
 
-def fee(amount: float, min_fee: float) -> float:
-    return max(amount * RATE, min_fee)
+def fee(amount: float, rate: float, min_fee: float) -> float:
+    return max(amount * rate, min_fee)
 
 
 def xirr(cashflows: list[tuple[date, float]], end_value: float,
@@ -84,7 +86,7 @@ def max_dd(values: list[float]) -> float:
     return dd
 
 
-def simulate(days, adj, plan, prem_ok, fee_min: float):
+def simulate(days, adj, plan, prem_ok, fee_rate: float, fee_min: float):
     """通用定投模拟。plan(d)->当日计划金额；prem_ok(d)->bool 是否允许买入。
 
     不允许时计划金额进 pending，下一允许日连本带额一起买。
@@ -105,7 +107,7 @@ def simulate(days, adj, plan, prem_ok, fee_min: float):
             invested += planned
             if prem_ok(d) and planned + pending > 0:
                 amount = planned + pending
-                f = fee(amount, fee_min)
+                f = fee(amount, fee_rate, fee_min)
                 fees += f
                 units += max(0.0, amount - f) / p
                 n_buys += 1
@@ -126,9 +128,15 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--daily", type=float, default=200.0)
     ap.add_argument("--code", default="159941")
-    ap.add_argument("--fee-min", type=float, default=5.0)
-    ap.add_argument("--fee-min-free", type=float, default=0.0)
+    ap.add_argument("--fee-rate", type=float, default=None,
+                    help="佣金费率（默认读配置 TRADING_FEE_RATE）")
+    ap.add_argument("--fee-min", type=float, default=None,
+                    help="单笔佣金最低（默认读配置 TRADING_FEE_MIN）")
     args = ap.parse_args(argv)
+
+    s = get_settings()
+    rate = args.fee_rate if args.fee_rate is not None else s.trading_fee_rate
+    min_fee = args.fee_min if args.fee_min is not None else s.trading_fee_min
 
     a = UNIVERSE[args.code]
     bars = fetch_all(args.code, a.data_from, date.today(), adjust="qfq")
@@ -166,18 +174,22 @@ def main(argv=None) -> int:
 
     print("=" * 96)
     print(f"定投复检：{args.code} {a.name}   每日 {args.daily:.0f} 元（周 {weekly:.0f} / 月 {monthly:.0f}）"
-          f"   佣金费率 {RATE:.2%}")
+          f"   佣金口径：费率 {rate:.4%} / 最低 {min_fee} 元")
     print(f"区间：{days[0]} ~ {days[-1]}（{len(days)} 个交易日）")
     print("=" * 96)
 
-    for label, fee_min in [("佣金最低 5 元", args.fee_min),
-                           ("免五（最低 0 元）", args.fee_min_free)]:
+    scenarios = [
+        (f"你的券商：费率 {rate:.4%} / 最低 {min_fee} 元", rate, min_fee),
+        (f"对照：费率 {CONTRAST_RATE:.4%} / 最低 {CONTRAST_MIN} 元",
+         CONTRAST_RATE, CONTRAST_MIN),
+    ]
+    for label, fr, fm in scenarios:
         print(f"\n【{label}】")
         print(f"{'策略':<20}{'总投入':>10}{'期末市值':>11}{'倍数':>7}"
               f"{'XIRR':>8}{'市值回撤':>9}{'买入次数':>8}{'总费用':>9}")
         print("-" * 96)
         for name, plan, ok in variants:
-            r = simulate(days, adj, plan, ok, fee_min)
+            r = simulate(days, adj, plan, ok, fr, fm)
             mult = r["value"] / r["invested"]
             print(f"{name:<20}{r['invested']:>8.0f}元{r['value']:>10.0f}元"
                   f"{mult:>7.2f}{r['xirr']:>8.2%}{r['dd']:>9.1%}"
@@ -186,8 +198,8 @@ def main(argv=None) -> int:
     over5 = sum(1 for d in days if prem.get(d, 0.0) > 0.05) / len(days)
     print(f"\n要点")
     print(f"  · 溢价>5% 天数占比 {over5:.0%} —— 暂停策略会频繁攒钱，但买点更便宜")
-    print(f"  · 佣金最低 5 元时：日投 1 手（≈162 元）单笔成本 3.1%，对 XIRR 是灾难；")
-    print(f"    若券商免五则日投无碍 —— **先查你的佣金单**")
+    print(f"  · 你的券商（万0.5 / 最低0.1元）：日投 1 手单笔佣金 0.1 元 ≈ 0.06%，")
+    print(f"    频率不再是成本问题；对照组（最低 5 元）则必须月投")
     print(f"  · 当前溢价 +10.32%（>5%）：按规则，今天的 200 元应当暂停")
     return 0
 
