@@ -79,7 +79,9 @@ watch(selectedCode, load);
       </table>
     </div>
 
-    <h2>场外因素分解（QQQ / 汇率 / 费用 / 溢价，docs/11）</h2>
+    <h2>收益归因：标的 / 汇率 / 费用 / 溢价（docs/11）
+      <span class="muted" style="font-size:12px;font-weight:400">
+        —— 仅解释收益来源，不参与买卖决策</span></h2>
     <template v-if="decomp && decomp.period">
       <div class="card">
         <div class="muted">

@@ -246,6 +246,38 @@ watch(selectedCode, load);
       <div v-else class="muted">暂无溢价趋势数据</div>
     </div>
 
+    <h2>信号数据来源（透明说明）</h2>
+    <div class="card">
+      <table>
+        <thead><tr><th>规则 / 指标</th><th style="text-align:left">数据来源</th>
+          <th style="text-align:left">用途</th></tr></thead>
+        <tbody>
+          <tr><td>溢价闸门</td>
+            <td style="text-align:left">本 ETF 场内价 ÷ 最近已公布净值</td>
+            <td class="muted" style="text-align:left">决定今天买不买</td></tr>
+          <tr><td>趋势闸门（可选）</td>
+            <td style="text-align:left">本 ETF 溢价的 7 日变化</td>
+            <td class="muted" style="text-align:left">拥挤加剧时暂停</td></tr>
+          <tr><td>回撤加码（可选）</td>
+            <td style="text-align:left">本 ETF 前复权价的 7 日涨跌</td>
+            <td class="muted" style="text-align:left">跌时加投</td></tr>
+          <tr><td>波动率区间 / 5 月线 / 价位</td>
+            <td style="text-align:left">本 ETF 前复权价</td>
+            <td class="muted" style="text-align:left">参考刻度，不单独触发</td></tr>
+          <tr><td>定投复盘 / 影子盘 / 我的盘</td>
+            <td style="text-align:left">本 ETF 价格序列</td>
+            <td class="muted" style="text-align:left">推演与核算</td></tr>
+          <tr style="color:var(--amber)"><td>收益分解（分析页）</td>
+            <td style="text-align:left">本 ETF + QQQ + 汇率</td>
+            <td style="text-align:left">⚠️ <b>仅归因</b>：解释收益从哪来，<b>不参与买卖决策</b></td></tr>
+        </tbody>
+      </table>
+      <div class="muted" style="margin-top:8px;font-size:12px">
+        所有买卖信号都基于<b>你实际交易的这只 ETF 的价格</b>；纳指（QQQ）只出现在收益归因里，
+        用于把收益拆成「标的涨跌 / 汇率 / 费用 / 溢价」四块——它不产生任何买卖动作。
+      </div>
+    </div>
+
     <h2>价格参考位（数据算出，非预测）</h2>
     <div class="card">
       <template v-if="levels && !levels.empty">
