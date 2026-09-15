@@ -414,7 +414,8 @@ def create_app(*, with_scheduler: bool = False) -> FastAPI:
             for k, v in PLANS.items()]}
 
     @app.post("/api/accounts")
-    def create_account(name: str, code: str, plan: str, kind: str = "paper",
+    def create_account(code: str, plan: str, kind: str = "paper",
+                       name: str | None = None,
                        start_day: str | None = None,
                        daily: float | None = None,
                        gate: float | None = None) -> dict:
@@ -472,6 +473,8 @@ def create_app(*, with_scheduler: bool = False) -> FastAPI:
                     out.append({**base, "empty": True})
                     continue
                 prem = store.load_premiums(conn, code)
+                flows = None
+                cash = 0.0
                 if kind == "paper":
                     trades = derive_paper_trades(plan, params, days, raw,
                                                  prem, start=start_day)
@@ -487,6 +490,31 @@ def create_app(*, with_scheduler: bool = False) -> FastAPI:
                               for d, a, p, q, am, f, nt
                               in store.account_trades(conn, aid)]
                     v = value_trades(trades, dict(zip(days, raw)), days[-1])
+                # 今日涨跌（相对上一交易日）；实际盘无现金概念，cash/flows 置空
+                prev_day = days[-2] if len(days) >= 2 else None
+                if prev_day is not None:
+                    prev_cash = 0.0
+                    if kind == "paper" and flows:
+                        pf = [f for f in flows if f[0] <= prev_day]
+                        prev_cash = max(
+                            0.0, sum(a for _, a in pf)
+                            - sum(t.amount for t in trades
+                                  if t.day <= prev_day))
+                    pv = value_trades(
+                        trades, dict(zip(days, raw)), prev_day,
+                        cash=prev_cash,
+                        flows=flows if kind == "paper" else None,
+                        as_of=prev_day)
+                    # 剔除当日新增投入（储蓄是打钱，不是赚的钱）
+                    contrib = 0.0
+                    if kind == "paper" and flows:
+                        contrib = sum(a for d, a in flows
+                                      if d == days[-1])
+                    v["prev_value"] = pv["value"]
+                    v["day_contribution"] = contrib
+                    v["day_pnl"] = v["value"] - contrib - pv["value"]
+                    v["day_pnl_pct"] = (
+                        (v["day_pnl"] / pv["value"]) if pv["value"] else None)
                 out.append({**base, **v})
             return {"items": out}
         finally:

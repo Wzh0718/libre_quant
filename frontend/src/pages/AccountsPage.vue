@@ -162,16 +162,36 @@ onMounted(async () => { await refreshAssets(); await load(); });
         {{ a.params.gate != null ? ` · 闸门 ${fmtPct(a.params.gate, 1, false)}` : "" }}</span>
     </div>
     <div v-if="!a.empty" class="grid cards" style="margin-top:12px">
-      <div><div class="muted">市值</div><div class="big num">{{ fmtYuan(a.value ?? 0) }}</div></div>
-      <div><div class="muted">投入 / 盈亏</div>
-        <div class="num">{{ fmtYuan(a.invested ?? 0) }} /
-          <span :style="(a.pnl ?? 0) >= 0 ? 'color:var(--green)' : 'color:var(--red)'">
-            {{ fmtYuan(a.pnl ?? 0) }}（{{ fmtPct(a.pnl_pct ?? null) }}）</span></div></div>
-      <div><div class="muted">份额 / 成本</div>
+      <div>
+        <div class="muted">累计涨跌幅（相对投入）</div>
+        <div class="big num"
+             :style="(a.pnl_pct ?? 0) >= 0 ? 'color:var(--green)' : 'color:var(--red)'">
+          {{ fmtPct(a.pnl_pct ?? null) }}
+        </div>
+        <div class="num" :style="(a.pnl ?? 0) >= 0 ? 'color:var(--green)' : 'color:var(--red)'">
+          {{ (a.pnl ?? 0) >= 0 ? "+" : "" }}{{ fmtYuan(a.pnl ?? 0) }} 元
+        </div>
+      </div>
+      <div>
+        <div class="muted">今日涨跌</div>
+        <div class="big num"
+             :style="(a.day_pnl ?? 0) >= 0 ? 'color:var(--green)' : 'color:var(--red)'">
+          {{ a.day_pnl_pct != null ? fmtPct(a.day_pnl_pct) : "—" }}
+        </div>
+        <div class="num" :style="(a.day_pnl ?? 0) >= 0 ? 'color:var(--green)' : 'color:var(--red)'">
+          {{ (a.day_pnl ?? 0) >= 0 ? "+" : "" }}{{ fmtYuan(a.day_pnl ?? 0) }} 元
+        </div>
+      </div>
+      <div><div class="muted">市值</div>
+        <div class="num" style="font-size:18px">{{ fmtYuan(a.value ?? 0) }} 元</div>
+        <div class="muted num" style="font-size:12px">
+          持仓 {{ fmtYuan(a.holdings ?? 0) }} + 现金 {{ fmtYuan(a.cash ?? 0) }} ·
+          投入 {{ fmtYuan(a.invested ?? 0) }}</div></div>
+      <div><div class="muted">份额 / 均价 / XIRR</div>
         <div class="num">{{ (a.units ?? 0).toFixed(1) }} 份 · 均价
-          {{ a.avg_cost ? a.avg_cost.toFixed(4) : "—" }}</div></div>
-      <div><div class="muted">XIRR / 成交</div>
-        <div class="num">{{ fmtPct(a.xirr ?? null) }} · {{ a.trades ?? 0 }} 笔</div></div>
+          {{ a.avg_cost ? a.avg_cost.toFixed(4) : "—" }}</div>
+        <div class="muted num" style="font-size:12px">
+          XIRR {{ fmtPct(a.xirr ?? null) }} · {{ a.trades ?? 0 }} 笔成交</div></div>
     </div>
     <div style="margin-top:12px;display:flex;gap:8px">
       <button class="badge badge-hold" style="cursor:pointer" @click="showOutlook(a.id)">

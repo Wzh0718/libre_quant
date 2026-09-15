@@ -116,3 +116,16 @@ def test_ladder_fixed_anchor_locks_cash_on_uptrend():
                         daily=200.0, start=days[0])
     assert r["buys"] == 0                            # 一路上涨，从未触发
     assert r["cash"] == 200.0 * 200                  # 钱全在现金里
+
+
+def test_value_trades_as_of_filters_history():
+    """历史估值必须只算当日及之前的成交（今日涨跌的正确前提）。"""
+    d1, d2 = date(2025, 1, 2), date(2025, 1, 3)
+    tr = [Trade(day=d1, action="buy", price=1.0, qty=100.0, amount=100.0),
+          Trade(day=d2, action="buy", price=1.0, qty=100.0, amount=100.0)]
+    prices = {d1: 1.0, d2: 2.0}
+    full = value_trades(tr, prices, d2)
+    prev = value_trades(tr, prices, d1, as_of=d1)
+    assert full["units"] == 200.0 and full["value"] == 400.0
+    assert prev["units"] == 100.0          # 只含 d1 那笔
+    assert prev["value"] == 100.0          # 100 份 × d1 价 1.0

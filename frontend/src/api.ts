@@ -134,9 +134,26 @@ export interface ReviewData {
   dca: DcaRow[];
 }
 
+/** 把 FastAPI 的错误体转成可读文字（detail 可能是字符串或校验错误数组）。 */
+function errText(body: unknown, status: number): string {
+  const d = (body as { detail?: unknown })?.detail;
+  if (typeof d === "string") return d;
+  if (Array.isArray(d)) {
+    return d.map((e) => {
+      const x = e as { loc?: unknown[]; msg?: string };
+      const where = Array.isArray(x.loc) ? x.loc.join(".") : "";
+      return `${where ? where + ": " : ""}${x.msg ?? JSON.stringify(e)}`;
+    }).join("；");
+  }
+  return `HTTP ${status}`;
+}
+
 async function getJson<T>(url: string): Promise<T> {
   const r = await fetch(url);
-  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  if (!r.ok) {
+    const body = await r.json().catch(() => null);
+    throw new Error(errText(body, r.status));
+  }
   return r.json();
 }
 
@@ -292,8 +309,8 @@ export async function ingestCode(code: string): Promise<IngestResult> {
     method: "POST",
   });
   if (!r.ok) {
-    const detail = await r.json().catch(() => ({ detail: `HTTP ${r.status}` }));
-    throw new Error(detail.detail ?? `HTTP ${r.status}`);
+    const body = await r.json().catch(() => null);
+    throw new Error(errText(body, r.status));
   }
   return r.json();
 }
@@ -331,6 +348,11 @@ export interface AccountRow {
   last_day?: string;
   xirr?: number | null;
   trades?: number;
+  holdings?: number;
+  cash?: number;
+  prev_value?: number;
+  day_pnl?: number;
+  day_pnl_pct?: number | null;
 }
 
 export interface OutlookRow {
@@ -380,8 +402,8 @@ export async function createAccount(q: {
   if (q.gate != null) p.set("gate", String(q.gate));
   const r = await fetch(`/api/accounts?${p}`, { method: "POST" });
   if (!r.ok) {
-    const d = await r.json().catch(() => ({ detail: `HTTP ${r.status}` }));
-    throw new Error(d.detail ?? `HTTP ${r.status}`);
+    const body = await r.json().catch(() => null);
+    throw new Error(errText(body, r.status));
   }
   return r.json();
 }
@@ -395,8 +417,8 @@ export async function addTrade(aid: number, q: {
   });
   const r = await fetch(`/api/accounts/${aid}/trade?${p}`, { method: "POST" });
   if (!r.ok) {
-    const d = await r.json().catch(() => ({ detail: `HTTP ${r.status}` }));
-    throw new Error(d.detail ?? `HTTP ${r.status}`);
+    const body = await r.json().catch(() => null);
+    throw new Error(errText(body, r.status));
   }
 }
 

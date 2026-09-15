@@ -148,12 +148,17 @@ def planned_flows(plan: str, params: dict, days: list[date],
 
 def value_trades(trades: list[Trade], prices: dict[date, float],
                  last_day: date, *, cash: float = 0.0,
-                 flows: list[tuple[date, float]] | None = None) -> dict:
+                 flows: list[tuple[date, float]] | None = None,
+                 as_of: date | None = None) -> dict:
     """按最新价格核算：份额、成本、市值（含待投现金）、盈亏、XIRR。
 
     ``cash``：待投现金（模拟盘闸门暂停攒下的钱，属于账户资产）；
     ``flows``：计划投入现金流（模拟盘用；实际盘为 None → 用买入流水）。
     """
+    if as_of is not None:                 # 历史估值：只算当日及之前的成交
+        trades = [t for t in trades if t.day <= as_of]
+        if flows is not None:
+            flows = [f for f in flows if f[0] <= as_of]
     units = invested = fees = 0.0
     for tr in trades:
         if tr.action == "buy":
