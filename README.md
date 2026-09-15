@@ -79,7 +79,13 @@ uv run python scripts/serve.py --once
 # 常驻采集服务（容器/Komodo 形态，内嵌 APScheduler 替代 cron）
 uv run python scripts/serve.py --catchup
 
-# 可视化看板（手动重建；常驻模式下每日自动刷新，http://localhost:8000/dashboard.html）
+# 可视化看板（FastAPI + Vue3/ECharts，生产形态单端口）
+uv run python scripts/api.py --port 8321            # http://localhost:8321
+
+# 前端开发（Vite 热更新，/api 代理到 8321）
+cd frontend && pnpm install && pnpm dev
+
+# 静态 HTML 兜底（无框架单文件；serve.py 每日也会重建到 web/）
 uv run python scripts/dashboard.py
 ```
 
@@ -117,6 +123,8 @@ libre_quant/
 │   ├── monthly_ma.py            5月线择时复检（--n 可调）
 │   ├── dca.py                   定投复检（频率/溢价暂停/佣金敏感性）
 │   ├── shadow.py                影子盘：每日步进 + 晋升检查单（--report）
+│   ├── dashboard.py             静态看板兜底（build_data 是 API/看板共用数据源）
+│   ├── api.py                   FastAPI + 看板托管入口（--with-scheduler 单容器形态）
 │   └── ingest.py                数据采集入库（--dry-run 冒烟 / --init-db）
 ├── src/libre_quant/
 │   ├── config.py                pydantic-settings 集中配置（.env）

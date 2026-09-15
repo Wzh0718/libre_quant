@@ -1,0 +1,49 @@
+:root {
+  color-scheme: dark;
+  --bg: #0d1117;
+  --surface: #161b22;
+  --border: #30363d;
+  --text: #e6edf3;
+  --muted: #8b949e;
+  --green: #3fb950;
+  --red: #f85149;
+  --amber: #d29922;
+  --blue: #58a6ff;
+}
+* { margin: 0; box-sizing: border-box; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.6 -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+main { max-width: 1080px; margin: 0 auto; padding: 24px; }
+h1 { font-size: 20px; font-weight: 600; }
+h2 {
+  font-size: 15px; font-weight: 600; margin: 24px 0 12px;
+  padding-top: 16px; border-top: 1px solid var(--border);
+}
+.num { font-variant-numeric: tabular-nums; font-feature-settings: "tnum"; }
+.muted { color: var(--muted); }
+.grid { display: grid; gap: 12px; }
+.cards { grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); }
+.card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 6px; padding: 16px;
+}
+.badge {
+  display: inline-block; padding: 2px 8px; border-radius: 6px;
+  font-size: 13px; font-weight: 600;
+}
+.badge-buy { background: rgba(63,185,80,.15); color: var(--green); border: 1px solid rgba(63,185,80,.4); }
+.badge-pause { background: rgba(248,81,73,.15); color: var(--red); border: 1px solid rgba(248,81,73,.4); }
+.badge-hold { background: rgba(210,153,34,.15); color: var(--amber); border: 1px solid rgba(210,153,34,.4); }
+.big { font-size: 28px; font-weight: 600; }
+table { width: 100%; border-collapse: collapse; }
+th, td { padding: 6px 8px; text-align: right; }
+th { color: var(--muted); font-weight: 500; border-bottom: 1px solid var(--border); }
+td { border-bottom: 1px solid rgba(48,54,61,.5); }
+td:first-child, th:first-child { text-align: left; }
+ul { padding-left: 20px; }
+li { margin: 4px 0; }
+.chart { width: 100%; height: 260px; }
+.state-block { padding: 48px 0; text-align: center; color: var(--muted); }

@@ -106,6 +106,7 @@ def build_data(conn, hero: str = HERO) -> dict:
         "gate": _arm_summary(gate_hist),
         "naive": _arm_summary(naive_hist),
         "checklist": checklist,
+        "curve_days": [str(r[0]) for r in gate_hist],
         "curves": {
             "gate": [float(r[5]) for r in gate_hist],
             "naive": [float(r[5]) for r in naive_hist],
@@ -119,6 +120,7 @@ def build_data(conn, hero: str = HERO) -> dict:
         "data_asof": str(hday),
         "hero": hero_d,
         "assets": assets,
+        "prem_days": [str(r[0]) for r in win],
         "prem_series": [float(r[3]) for r in win],
         "px_norm": [float(r[1]) / px0 * 100 for r in win],
         "nav_norm": [float(r[2]) / nav0 * 100 for r in win],

@@ -17,3 +17,5 @@ wheels/
 .ruff_cache/
 backtest-latest.txt
 web/
+frontend/node_modules/
+frontend/dist/

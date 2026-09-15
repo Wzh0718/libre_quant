@@ -86,9 +86,12 @@
     由每日更新任务按「最近已公布净值」规则刷新 —— 把 ASOF 配对逻辑固化在
     **写入时**（§8.2 的惯例规则），查询端零特殊语法。
   - 部署（2026-09-15 修订）：**GitHub 托管 + Komodo 容器部署**，
-    定时任务内嵌框架而非宿主 cron —— `scripts/serve.py`（APScheduler
-    BlockingScheduler，Asia/Shanghai 周一~五 20:00，启动幂等建表，
-    `--catchup` 补跑、`--once` 单轮验证）；仓库含 `Dockerfile`，
+    定时任务内嵌框架而非宿主 cron —— `scripts/api.py --with-scheduler`
+    （FastAPI 进程内 APScheduler BackgroundScheduler，Asia/Shanghai
+    周一~五 20:00，启动幂等建表）；单容器单端口（8321）同时服务
+    Vue3 看板与 `/api/*`。调度器-only 形态仍可用 `scripts/serve.py`
+    （BlockingScheduler + 内置静态服务 :8000）。
+    仓库含多阶段 `Dockerfile`（node 构建前端 → python 运行时），
     `DATABASE_URL` 由 Komodo 环境注入（单账号即可，管理员权限）。
     5432 不暴露公网，跨机器走 wireguard/tailscale 或 SSH 隧道。
   - 安全：5432 **不暴露公网**，走 wireguard/tailscale 或 SSH 隧道。
