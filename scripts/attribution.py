@@ -244,15 +244,15 @@ def report(name: str, att: Attribution, top: int = 4) -> None:
     ins = [s for s in segs if s.kind == "IN"]
     outs = [s for s in segs if s.kind == "OUT"]
     wins = [s for s in ins if s.good]
+    losses = [s for s in ins if not s.good]
     print(f"\n  交易统计：共 {len(ins)} 段持仓 / {len(outs)} 段空仓，"
           f"胜率 {len(wins) / len(ins):.0%}" if ins else "  无交易")
     if ins:
         avg_win = sum(s.move for s in wins) / len(wins) if wins else 0
-        losses = [s for s in ins if not s.good]
         avg_loss = sum(s.move for s in losses) / len(losses) if losses else 0
         print(f"    平均盈利段 {pct(avg_win)}   平均亏损段 {pct(avg_loss)}")
 
-    print(f"\n  亏损最大的 {min(top, len(losses) if ins else 0)} 段持仓"
+    print(f"\n  亏损最大的 {min(top, len(losses))} 段持仓"
           f"（这些就是「为什么亏」的答案）：")
     for s in sorted(losses, key=lambda s: s.move)[:top]:
         print(f"    {s.start} ~ {s.end}  持 {s.days:>3} 日  {pct(s.move):>8}")
