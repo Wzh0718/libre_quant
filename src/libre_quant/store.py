@@ -28,11 +28,12 @@ CREATE TABLE IF NOT EXISTS price (
     code       TEXT  NOT NULL,
     day        DATE  NOT NULL,
     open  REAL, high REAL, low REAL, close REAL, volume REAL,
+    adj_close  REAL,
     source     TEXT  NOT NULL DEFAULT 'tencent',
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (code, day)
 );
-COMMENT ON TABLE price IS '日线（A 股 ETF=腾讯 CNY；spy/qqq=新浪 USD，币种见 universe）';
+COMMENT ON TABLE price IS '日线：close=不复权（与净值对照算溢价）；adj_close=前复权（算收益）。QDII 历史份额折算会让 qfq 价格水平失真（513100 折算因子≈5，2014 年 qfq 价 0.25 vs 真实 1.24/净值 1.25），溢价/水平对照必须用 close';
 
 CREATE TABLE IF NOT EXISTS nav (
     code       TEXT  NOT NULL,
@@ -107,18 +108,30 @@ def init_db(conn) -> None:
     conn.commit()
 
 
-def upsert_prices(conn, code: str, bars: Iterable[Bar], *, source: str) -> int:
-    rows = [(code, b.day, b.open, b.high, b.low, b.close, b.volume, source) for b in bars]
+def upsert_prices(
+    conn, code: str, bars: Iterable[Bar], *, source: str,
+    adj_closes: dict[date, float] | None = None,
+) -> int:
+    """``bars`` 的 close 应为**不复权**价（溢价/水平对照）；
+    ``adj_closes`` 提供同日**前复权**收盘（收益计算），缺省则 adj_close 为 NULL。"""
+    adj = adj_closes or {}
+    rows = [
+        (code, b.day, b.open, b.high, b.low, b.close, b.volume,
+         adj.get(b.day), source)
+        for b in bars
+    ]
     if not rows:
         return 0
     with conn.cursor() as cur:
         cur.executemany(
             """
-            INSERT INTO price (code, day, open, high, low, close, volume, source)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO price (code, day, open, high, low, close, volume,
+                               adj_close, source)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (code, day) DO UPDATE SET
                 open = EXCLUDED.open, high = EXCLUDED.high, low = EXCLUDED.low,
                 close = EXCLUDED.close, volume = EXCLUDED.volume,
+                adj_close = EXCLUDED.adj_close,
                 source = EXCLUDED.source, updated_at = now()
             """,
             rows,
@@ -180,7 +193,7 @@ def load_closes(
     start: date | None = None, end: date | None = None,
 ) -> tuple[list[date], list[float]]:
     """分析端取收盘序列（升序）。"""
-    q = "SELECT day, close FROM price WHERE code = %s"
+    q = "SELECT day, COALESCE(adj_close, close) FROM price WHERE code = %s"
     params: list = [code]
     if start:
         q += " AND day >= %s"

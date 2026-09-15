@@ -32,15 +32,23 @@ from libre_quant.universe import Asset, get as get_asset  # noqa: E402
 
 
 def collect_prices(asset: Asset, end: date):
-    """抓某标的日线（A 股=腾讯分页；美股=新浪全历史）。"""
+    """抓某标的日线，返回 (不复权 bars, 前复权收盘 dict | None)。
+
+    A 股：不复权价与净值对照算溢价，前复权价算收益 —— 两套都要
+    （QDII 历史份额折算会让 qfq 价格水平失真，见 store 模块注释）。
+    美股（新浪源本身不复权）：只抓一套，adj 为 None。
+    """
     if asset.kind == universe.KIND_US_ETF:
         bars = fetch_us_daily(asset.code)
         bars = [b for b in bars if asset.data_from <= b.day <= end]
         # 统一成 quotes.Bar 形状（store 只用字段名）
         from libre_quant.data.quotes import Bar
         return [Bar(day=b.day, open=b.open, close=b.close,
-                    high=b.high, low=b.low, volume=b.volume) for b in bars]
-    return fetch_daily_all(asset.code, asset.data_from, end)
+                    high=b.high, low=b.low, volume=b.volume) for b in bars], None
+    raw = fetch_daily_all(asset.code, asset.data_from, end, adjust="")
+    qfq = {b.day: b.close
+           for b in fetch_daily_all(asset.code, asset.data_from, end, adjust="qfq")}
+    return raw, qfq
 
 
 def run(codes: list[str], *, dry_run: bool, init_db: bool, end: date) -> int:
@@ -51,12 +59,14 @@ def run(codes: list[str], *, dry_run: bool, init_db: bool, end: date) -> int:
         print("[init-db] schema 就绪")
 
     for asset in assets:
-        # -- 价格 ------------------------------------------------------------
-        bars = collect_prices(asset, end)
+        # -- 价格（不复权为主 + 前复权 adjunct）------------------------------
+        bars, adj = collect_prices(asset, end)
         span = f"{bars[0].day} ~ {bars[-1].day}" if bars else "-"
-        print(f"[price] {asset.code:<7} {asset.name:<12} {len(bars):>5} 根  {span}")
+        print(f"[price] {asset.code:<7} {asset.name:<12} {len(bars):>5} 根  {span}"
+              + (f"（+qfq {len(adj)}）" if adj else ""))
         if conn is not None:
-            n = store.upsert_prices(conn, asset.code, bars, source=asset.price_source)
+            n = store.upsert_prices(conn, asset.code, bars,
+                                    source=asset.price_source, adj_closes=adj)
             print(f"        ↑ 入库 {n} 行")
 
         # -- 净值（仅 A 股上市 ETF）-------------------------------------------

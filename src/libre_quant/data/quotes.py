@@ -133,7 +133,9 @@ def fetch_daily(
     adjust: str = "qfq",
     timeout: float = 20.0,
 ) -> list[Bar]:
-    """取单只股票日线（前复权）。返回按日期升序的 :class:`Bar` 列表。"""
+    """取单只股票日线。``adjust="qfq"``（前复权，算收益用）或 ``""``（不复权，
+    与净值等**价格水平**对照用——QDII 历史份额折算会让 qfq 价失真，见
+    ``store`` 模块注释）。返回按日期升序的 :class:`Bar` 列表。"""
     sess = session or requests.Session()
     sess.headers.update({"User-Agent": _UA})
     sess.trust_env = False
@@ -188,10 +190,13 @@ def fetch_daily_all(
     *,
     session: requests.Session | None = None,
     sleep: float = 0.2,
+    adjust: str = "qfq",
 ) -> list[Bar]:
     """取全区间日线（腾讯单次上限 640 根，按最早日期游标向前翻页）。
 
     从 ``scripts/backtest.py`` 提升为库函数：回测与入库采集共用同一实现。
+    ``adjust`` 语义同 :func:`fetch_daily`（收益分析用 ``"qfq"``；
+    与净值对照的**价格水平**用 ``""`` 不复权）。
     返回按日期升序的 :class:`Bar` 列表；区间早于上市日时返回上市后的数据。
     """
     import time
@@ -203,7 +208,7 @@ def fetch_daily_all(
     out: dict[date, Bar] = {}
     cursor = end
     while True:
-        bars = fetch_daily(code, start, cursor, session=sess)
+        bars = fetch_daily(code, start, cursor, session=sess, adjust=adjust)
         if not bars:
             break
         before = len(out)
