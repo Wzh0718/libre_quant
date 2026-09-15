@@ -4,6 +4,7 @@ import AnalysisPage from "./pages/AnalysisPage.vue";
 import ReplayPage from "./pages/ReplayPage.vue";
 import ReviewPage from "./pages/ReviewPage.vue";
 import ShadowPage from "./pages/ShadowPage.vue";
+import AccountsPage from "./pages/AccountsPage.vue";
 
 export const router = createRouter({
   history: createWebHistory(),
@@ -19,5 +20,7 @@ export const router = createRouter({
       meta: { title: "历史复盘" } },
     { path: "/shadow", name: "shadow", component: ShadowPage,
       meta: { title: "影子盘" } },
+    { path: "/accounts", name: "accounts", component: AccountsPage,
+      meta: { title: "我的盘" } },
   ],
 });

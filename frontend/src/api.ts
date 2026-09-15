@@ -300,3 +300,109 @@ export async function ingestCode(code: string): Promise<IngestResult> {
 
 export const fetchAssets = () =>
   getJson<{ items: AssetItem[] }>("/api/assets");
+
+// ---------------------------------------------------------------- 我的盘
+
+export interface PlanItem {
+  plan: string;
+  name: string;
+  desc: string;
+  defaults: { daily?: number; gate?: number };
+}
+
+export interface AccountRow {
+  id: number;
+  name: string;
+  code: string;
+  kind: "paper" | "real";
+  plan: string;
+  plan_label: string;
+  params: { daily?: number; gate?: number };
+  start_day: string;
+  empty?: boolean;
+  units?: number;
+  invested?: number;
+  fees?: number;
+  value?: number;
+  pnl?: number;
+  pnl_pct?: number | null;
+  avg_cost?: number | null;
+  last_price?: number | null;
+  last_day?: string;
+  xirr?: number | null;
+  trades?: number;
+}
+
+export interface OutlookRow {
+  day: string;
+  weekday: string;
+  action: string;
+  condition: string;
+  amount: number;
+  pending_if_pause: number;
+  value_low: number | null;
+  value_high: number | null;
+}
+
+export interface OutlookData {
+  account: { id: number; name: string; kind: string; code: string;
+             plan: string; start_day: string };
+  valuation: Record<string, number | string | null>;
+  pending_cash: number;
+  code: string;
+  plan: string;
+  plan_label: string;
+  as_of: string;
+  current_premium: number | null;
+  premium_stat: { bucket: string; n: number; fwd1: number | null;
+                  fwd5: number | null } | null;
+  vol_ann: number | null;
+  sigma_day: number | null;
+  rows: OutlookRow[];
+  disclaimer: string;
+}
+
+export const fetchPlans = () => getJson<{ items: PlanItem[] }>("/api/plans");
+export const fetchAccounts = () =>
+  getJson<{ items: AccountRow[] }>("/api/accounts");
+
+export async function createAccount(q: {
+  name?: string; code: string; plan: string; kind: string;
+  start_day?: string; daily?: number; gate?: number;
+}): Promise<{ id: number }> {
+  const p = new URLSearchParams();
+  p.set("code", q.code);
+  p.set("plan", q.plan);
+  p.set("kind", q.kind);
+  if (q.name) p.set("name", q.name);
+  if (q.start_day) p.set("start_day", q.start_day);
+  if (q.daily != null) p.set("daily", String(q.daily));
+  if (q.gate != null) p.set("gate", String(q.gate));
+  const r = await fetch(`/api/accounts?${p}`, { method: "POST" });
+  if (!r.ok) {
+    const d = await r.json().catch(() => ({ detail: `HTTP ${r.status}` }));
+    throw new Error(d.detail ?? `HTTP ${r.status}`);
+  }
+  return r.json();
+}
+
+export async function addTrade(aid: number, q: {
+  day: string; price: number; qty: number; action?: string; note?: string;
+}): Promise<void> {
+  const p = new URLSearchParams({
+    day: q.day, price: String(q.price), qty: String(q.qty),
+    action: q.action ?? "buy", note: q.note ?? "",
+  });
+  const r = await fetch(`/api/accounts/${aid}/trade?${p}`, { method: "POST" });
+  if (!r.ok) {
+    const d = await r.json().catch(() => ({ detail: `HTTP ${r.status}` }));
+    throw new Error(d.detail ?? `HTTP ${r.status}`);
+  }
+}
+
+export async function deleteAccount(aid: number): Promise<void> {
+  await fetch(`/api/accounts/${aid}`, { method: "DELETE" });
+}
+
+export const fetchOutlook = (aid: number, n = 3) =>
+  getJson<OutlookData>(`/api/accounts/${aid}/outlook?n=${n}`);

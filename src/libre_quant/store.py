@@ -110,6 +110,33 @@ CREATE TABLE IF NOT EXISTS asset_meta (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 COMMENT ON TABLE asset_meta IS '注册表外标的的名称/类别（用户输入任意代码检索入库时写入）';
+
+CREATE TABLE IF NOT EXISTS account (
+    id         SERIAL PRIMARY KEY,
+    name       TEXT NOT NULL,
+    kind       TEXT NOT NULL,            -- 'paper'（模拟盘）| 'real'（实际盘）
+    code       TEXT NOT NULL,
+    plan       TEXT NOT NULL DEFAULT 'gate',   -- naive/gate/deep_value/monthly
+    params     JSONB NOT NULL DEFAULT '{}'::jsonb,
+    start_day  DATE NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+COMMENT ON TABLE account IS '我的盘：模拟盘按方案自动推演，实际盘记录用户真实成交';
+
+CREATE TABLE IF NOT EXISTS account_trade (
+    id         SERIAL PRIMARY KEY,
+    account_id INTEGER NOT NULL REFERENCES account(id) ON DELETE CASCADE,
+    day        DATE NOT NULL,
+    action     TEXT NOT NULL DEFAULT 'buy',    -- buy | sell
+    price      DOUBLE PRECISION NOT NULL,
+    qty        DOUBLE PRECISION NOT NULL,
+    amount     DOUBLE PRECISION NOT NULL,      -- 成交金额（含费）
+    fee        DOUBLE PRECISION NOT NULL DEFAULT 0,
+    note       TEXT DEFAULT '',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (account_id, day, action, price, qty)
+);
+COMMENT ON TABLE account_trade IS '成交流水（模拟盘由方案推演写入，实际盘由用户录入）';
 """
 
 
@@ -405,6 +432,69 @@ def upsert_asset_meta(conn, code: str, name: str, kind: str) -> None:
     conn.commit()
 
 
+# ---------------------------------------------------------------- 我的盘
+
+def create_account(conn, name: str, kind: str, code: str, plan: str,
+                   params: dict, start_day: date) -> int:
+    import json as _json
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO account (name, kind, code, plan, params, start_day) "
+            "VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
+            (name, kind, code, plan, _json.dumps(params), start_day))
+        aid = cur.fetchone()[0]
+    conn.commit()
+    return aid
+
+
+def list_accounts(conn) -> list[tuple]:
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT id, name, kind, code, plan, params, start_day "
+            "FROM account ORDER BY id")
+        return cur.fetchall()
+
+
+def get_account(conn, aid: int):
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT id, name, kind, code, plan, params, start_day "
+            "FROM account WHERE id = %s", (aid,))
+        return cur.fetchone()
+
+
+def delete_account(conn, aid: int) -> None:
+    with conn.cursor() as cur:
+        cur.execute("DELETE FROM account WHERE id = %s", (aid,))
+    conn.commit()
+
+
+def add_trade(conn, account_id: int, day: date, action: str, price: float,
+              qty: float, amount: float, fee: float = 0.0,
+              note: str = "") -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO account_trade (account_id, day, action, price, qty,
+                                       amount, fee, note)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (account_id, day, action, price, qty) DO UPDATE SET
+                amount = EXCLUDED.amount, fee = EXCLUDED.fee,
+                note = EXCLUDED.note
+            """,
+            (account_id, day, action, price, qty, amount, fee, note))
+    conn.commit()
+
+
+def account_trades(conn, account_id: int) -> list[tuple]:
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT day, action, price, qty, amount, fee, note "
+            "FROM account_trade WHERE account_id = %s ORDER BY day, id",
+            (account_id,))
+        return cur.fetchall()
+
+
 # ---------------------------------------------------------------- 场外/日内
 
 def upsert_macro(conn, series: str, points: list) -> int:
@@ -478,6 +568,8 @@ __all__ = [
     "load_closes", "load_prices", "load_series", "load_navs", "load_premiums",
     "upsert_macro", "load_macro", "upsert_intraday", "load_intraday",
     "upsert_asset_meta",
+    "create_account", "list_accounts", "get_account", "delete_account",
+    "add_trade", "account_trades",
     "premium_latest",
     "signal_upsert", "shadow_state_before", "shadow_upsert",
     "shadow_history", "signal_history",

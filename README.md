@@ -80,8 +80,9 @@ uv run python scripts/serve.py --once
 uv run python scripts/serve.py --catchup
 
 # 可视化看板（FastAPI + Vue3/ECharts，生产形态单端口）
-# 五页：今日决策（推理链+盘中实时）/ 深度分析（溢价分桶+场外因素分解）/
-#       复盘模拟（逐日流水账）/ 历史复盘（策略对比+定投）/ 影子盘
+# 六页：今日决策（推理链+盘中实时）/ 深度分析（溢价分桶+场外因素分解）/
+#       复盘模拟（逐日流水账）/ 历史复盘（策略对比+定投）/ 影子盘 /
+#       我的盘（选标的+选方案开盘｜实际盘录入成交｜未来 3 天预案）
 # 顶栏「标的检索」：输入任意基金/股票代码 → 自动拉历史入库 → 全站可跑盘
 uv run python scripts/api.py --port 8321            # http://localhost:8321
 
@@ -117,7 +118,8 @@ libre_quant/
 │   ├── 10-shadow.md             影子盘方法论与晋升标准（champion-challenger）
 │   ├── 11-decomp-replay.md      场外因素分解（标的/汇率/费用/溢价）+ 逐日定投复盘
 │   ├── 12-strategy-optimization.md  定投可优化空间实测（投放层/持仓层）
-│   └── 13-asset-search.md       标的检索层：任意基金/股票代码 → 拉历史 → 跑盘
+│   ├── 13-asset-search.md       标的检索层：任意基金/股票代码 → 拉历史 → 跑盘
+│   └── 14-my-accounts.md        我的盘：模拟盘/实际盘/未来 3 天预案
 ├── scripts/
 │   ├── p0_spike.py              PCF 可得性验收
 │   ├── p0_weights.py            PCF + 价格 → 精确权重

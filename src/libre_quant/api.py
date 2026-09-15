@@ -342,6 +342,9 @@ def create_app(*, with_scheduler: bool = False) -> FastAPI:
             asset = resolve_one(code)
         except (KeyError, ValueError) as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
+        if asset.price_source is None:
+            raise HTTPException(
+                400, f"{code} 非场内标的（本项目只做场内股票/ETF）")
 
         conn = store.connect()
         try:
@@ -399,6 +402,179 @@ def create_app(*, with_scheduler: bool = False) -> FastAPI:
                           "in_universe": a is not None})
         items.sort(key=lambda x: (not x["in_universe"], x["code"]))
         return {"items": items}
+
+    # ------------------------------------------------ 我的盘（模拟盘/实际盘）
+
+    @app.get("/api/plans")
+    def plans() -> dict:
+        """可选方案清单（前端下拉用）。"""
+        from libre_quant.accounts import PLANS
+        return {"items": [
+            {"plan": k, "name": v[0], "desc": v[1], "defaults": v[2]}
+            for k, v in PLANS.items()]}
+
+    @app.post("/api/accounts")
+    def create_account(name: str, code: str, plan: str, kind: str = "paper",
+                       start_day: str | None = None,
+                       daily: float | None = None,
+                       gate: float | None = None) -> dict:
+        """开盘：建模拟盘或实际盘（只支持场内标的）。"""
+        from datetime import date as _date
+
+        from fastapi import HTTPException
+
+        from libre_quant import store
+        from libre_quant.accounts import PLANS, plan_defaults
+
+        if plan not in PLANS:
+            raise HTTPException(400, f"未知方案: {plan}")
+        params = plan_defaults(plan)
+        if daily is not None:
+            params["daily"] = daily
+        if gate is not None:
+            params["gate"] = gate
+
+        conn = store.connect()
+        try:
+            days, raw, adj, src = store.load_series(conn, code)
+            if src != "price":
+                raise HTTPException(
+                    400, f"{code} 没有场内价格（本项目只做场内标的）")
+            sd = _date.fromisoformat(start_day) if start_day else days[-1]
+            sd = max(sd, days[0])
+            aid = store.create_account(
+                conn, name or f"{code} {PLANS[plan][0]}", kind, code, plan,
+                params, sd)
+        finally:
+            conn.close()
+        return {"id": aid, "code": code, "plan": plan, "kind": kind,
+                "params": params, "start_day": str(sd)}
+
+    @app.get("/api/accounts")
+    def accounts() -> dict:
+        """我的盘清单（含实时估值）。"""
+        from libre_quant import store
+        from libre_quant.accounts import (
+            Trade, derive_paper_trades, plan_label, planned_flows,
+            value_trades,
+        )
+
+        conn = store.connect()
+        try:
+            out = []
+            for aid, name, kind, code, plan, params, start_day in \
+                    store.list_accounts(conn):
+                days, raw, adj, src = store.load_series(conn, code)
+                base = {"id": aid, "name": name, "code": code, "kind": kind,
+                        "plan": plan, "plan_label": plan_label(plan),
+                        "params": params, "start_day": str(start_day)}
+                if not days:
+                    out.append({**base, "empty": True})
+                    continue
+                prem = store.load_premiums(conn, code)
+                if kind == "paper":
+                    trades = derive_paper_trades(plan, params, days, raw,
+                                                 prem, start=start_day)
+                    flows = planned_flows(plan, params, days, start_day)
+                    cash = max(0.0, sum(a for _, a in flows)
+                               - sum(t.amount for t in trades))
+                    v = value_trades(trades, dict(zip(days, raw)), days[-1],
+                                     cash=cash, flows=flows)
+                else:
+                    trades = [Trade(day=d, action=a, price=float(p),
+                                    qty=float(q), amount=float(am),
+                                    fee=float(f), note=nt or "")
+                              for d, a, p, q, am, f, nt
+                              in store.account_trades(conn, aid)]
+                    v = value_trades(trades, dict(zip(days, raw)), days[-1])
+                out.append({**base, **v})
+            return {"items": out}
+        finally:
+            conn.close()
+
+    @app.post("/api/accounts/{aid}/trade")
+    def add_trade(aid: int, day: str, price: float, qty: float,
+                  action: str = "buy", note: str = "") -> dict:
+        """实际盘录入成交（模拟盘不需要，按方案自动推演）。"""
+        from datetime import date as _date
+
+        from fastapi import HTTPException
+
+        from libre_quant import store
+        from libre_quant.accounts import DEFAULT_FEE_MIN, DEFAULT_FEE_RATE
+
+        conn = store.connect()
+        try:
+            if not store.get_account(conn, aid):
+                raise HTTPException(404, "账户不存在")
+            amount = price * qty
+            fee = max(amount * DEFAULT_FEE_RATE, DEFAULT_FEE_MIN)
+            store.add_trade(conn, aid, _date.fromisoformat(day), action,
+                            price, qty, amount, fee, note)
+        finally:
+            conn.close()
+        return {"ok": True, "amount": amount, "fee": fee}
+
+    @app.delete("/api/accounts/{aid}")
+    def delete_account(aid: int) -> dict:
+        from libre_quant import store
+        conn = store.connect()
+        try:
+            store.delete_account(conn, aid)
+        finally:
+            conn.close()
+        return {"ok": True}
+
+    @app.get("/api/accounts/{aid}/outlook")
+    def account_outlook(aid: int, n: int = 3) -> dict:
+        """未来 n 个交易日的预案：执行动作 + 波动率区间 + 溢价前向分布。"""
+        from fastapi import HTTPException
+
+        from libre_quant import store
+        from libre_quant.accounts import (
+            Trade, derive_paper_trades, outlook, value_trades,
+        )
+        from libre_quant.review import premium_analytics
+
+        conn = store.connect()
+        try:
+            row = store.get_account(conn, aid)
+            if not row:
+                raise HTTPException(404, "账户不存在")
+            _aid, _name, kind, code, plan, params, start_day = row
+            days, raw, adj, src = store.load_series(conn, code)
+            if not days:
+                raise HTTPException(400, "标的数据为空")
+            prem = store.load_premiums(conn, code)
+            if kind == "paper":
+                trades = derive_paper_trades(plan, params, days, raw, prem,
+                                             start=start_day)
+            else:
+                trades = [Trade(day=d, action=a, price=float(p), qty=float(q),
+                                amount=float(am), fee=float(f), note=nt or "")
+                          for d, a, p, q, am, f, nt
+                          in store.account_trades(conn, aid)]
+            v = value_trades(trades, dict(zip(days, raw)), days[-1])
+            cash = 0.0
+            if kind == "paper":
+                from libre_quant.accounts import planned_flows
+                flows = planned_flows(plan, params, days, start_day)
+                cash = max(0.0, sum(a for _, a in flows)
+                           - sum(t.amount for t in trades))
+            buckets = premium_analytics(days, adj, prem)["buckets"] \
+                if prem else []
+            return {
+                "account": {"id": aid, "name": _name, "kind": kind,
+                            "code": code, "plan": plan,
+                            "start_day": str(start_day)},
+                "valuation": v, "pending_cash": cash,
+                **outlook(code=code, plan=plan, params=params, days=days,
+                          prices=raw, prem=prem, pending_cash=cash,
+                          units=v["units"], buckets=buckets, n_days=n,
+                          cash=cash),
+            }
+        finally:
+            conn.close()
 
     @app.get("/api/health")
     def health() -> dict:

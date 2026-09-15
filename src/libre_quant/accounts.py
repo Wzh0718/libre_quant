@@ -1,0 +1,282 @@
+"""我的盘（模拟盘 / 实际盘）与未来 3 天预案（纯逻辑，可离线测）。
+
+设计
+----
+* **模拟盘（paper）**：给定方案（plan）+ 参数（每日金额、闸门阈值），
+  从起始日按历史价格**推演**每个交易日的动作（不强求逐日写库，
+  读取时按需推演即可，天然幂等）。
+* **实际盘（real）**：用户录入真实成交（日期/价格/数量/金额），
+  系统用库内价格做市值与盈亏核算。
+* **未来 3 天预案（outlook）**：不给价格预测（已证伪），只给
+  ①执行预案（买/停 + 触发条件）②波动率区间（±1σ）③当前溢价状态下的
+  历史前向收益分布——都是可验证的东西。
+"""
+
+from __future__ import annotations
+
+import math
+import sys
+from dataclasses import dataclass, field
+from datetime import date, timedelta
+
+from libre_quant.config import PROJECT_ROOT
+from libre_quant.shadow import GATE_THRESH
+
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+TRADING_DAYS = 244
+
+#: 方案注册表：name → (中文名, 说明, 默认参数)
+PLANS: dict[str, tuple[str, str, dict]] = {
+    "naive": ("朴素日投", "每个交易日按固定金额买入", {"daily": 200.0}),
+    "gate": ("闸门日投", "溢价超过阈值当日暂停，钱攒着等回落后补投",
+             {"daily": 200.0, "gate": GATE_THRESH}),
+    "deep_value": ("折价重投", "折价/极低溢价时全投，溢价偏高时只投一半或暂停",
+                   {"daily": 200.0, "gate": GATE_THRESH}),
+    "monthly": ("月度定投", "每月首个交易日按月度金额买入", {"daily": 200.0}),
+}
+
+DEFAULT_FEE_RATE = 0.00005
+DEFAULT_FEE_MIN = 0.1
+
+
+def plan_defaults(plan: str) -> dict:
+    if plan not in PLANS:
+        raise KeyError(f"未知方案: {plan}（可选 {sorted(PLANS)}）")
+    return dict(PLANS[plan][2])
+
+
+def plan_label(plan: str) -> str:
+    return PLANS.get(plan, (plan, "", {}))[0]
+
+
+def fraction_for(plan: str, premium: float | None, gate: float) -> float:
+    """当日投放比例（相对当日计划金额）。0 = 暂停。"""
+    if plan == "naive":
+        return 1.0
+    if premium is None:
+        return 1.0 if plan != "deep_value" else 1.0
+    if plan == "gate":
+        return 0.0 if premium > gate else 1.0
+    if plan == "deep_value":
+        if premium > gate:
+            return 0.0
+        if premium < 0.005:
+            return 1.0
+        if premium < 0.02:
+            return 0.5
+        return 0.0
+    if plan == "monthly":
+        return 1.0
+    return 1.0
+
+
+@dataclass
+class Trade:
+    day: date
+    action: str          # buy / sell
+    price: float
+    qty: float
+    amount: float
+    fee: float = 0.0
+    note: str = ""
+
+
+def derive_paper_trades(
+    plan: str, params: dict, days: list[date], prices: list[float],
+    prem: dict[date, float], *, start: date,
+    fee_rate: float = DEFAULT_FEE_RATE, fee_min: float = DEFAULT_FEE_MIN,
+) -> list[Trade]:
+    """按方案推演模拟盘成交流水（只含真实成交日，暂停日不入流水）。"""
+    daily = float(params.get("daily", 200.0))
+    gate = float(params.get("gate", GATE_THRESH))
+    monthly_amt = daily * 20
+    pending = 0.0
+    trades: list[Trade] = []
+    for t, d in enumerate(days):
+        if d < start:
+            continue
+        if plan == "monthly":
+            if t > 0 and d.month == days[t - 1].month:
+                continue
+            amount = monthly_amt
+        else:
+            amount = daily
+        frac = fraction_for(plan, prem.get(d), gate)
+        budget = amount + pending
+        if frac <= 0:
+            pending += amount
+            continue
+        spend = budget * frac
+        pending = budget - spend
+        if spend <= 0:
+            continue
+        fee = max(spend * fee_rate, fee_min)
+        px = prices[t]
+        trades.append(Trade(day=d, action="buy", price=px,
+                            qty=(spend - fee) / px, amount=spend, fee=fee,
+                            note="模拟盘推演"))
+    return trades
+
+
+def planned_flows(plan: str, params: dict, days: list[date],
+                  start: date) -> list[tuple[date, float]]:
+    """模拟盘的**计划投入现金流**（暂停日也算投出——钱进了待投现金）。"""
+    daily = float(params.get("daily", 200.0))
+    monthly = daily * 20
+    flows: list[tuple[date, float]] = []
+    for t, d in enumerate(days):
+        if d < start:
+            continue
+        if plan == "monthly":
+            if t > 0 and d.month == days[t - 1].month:
+                continue
+            flows.append((d, monthly))
+        else:
+            flows.append((d, daily))
+    return flows
+
+
+def value_trades(trades: list[Trade], prices: dict[date, float],
+                 last_day: date, *, cash: float = 0.0,
+                 flows: list[tuple[date, float]] | None = None) -> dict:
+    """按最新价格核算：份额、成本、市值（含待投现金）、盈亏、XIRR。
+
+    ``cash``：待投现金（模拟盘闸门暂停攒下的钱，属于账户资产）；
+    ``flows``：计划投入现金流（模拟盘用；实际盘为 None → 用买入流水）。
+    """
+    units = invested = fees = 0.0
+    for tr in trades:
+        if tr.action == "buy":
+            units += tr.qty
+            invested += tr.amount
+            fees += tr.fee
+        else:
+            units -= tr.qty
+            invested -= tr.amount
+            fees += tr.fee
+    px = prices.get(last_day)
+    if px is None:                      # 找最近有效价
+        for d in sorted(prices, reverse=True):
+            if d <= last_day:
+                px = prices[d]
+                last_day = d
+                break
+    holdings = units * (px or 0.0)
+    value = holdings + cash
+    if flows is not None:                 # 模拟盘：投入=计划现金流
+        contributed = sum(a for _, a in flows)
+        basis = contributed
+    else:                                 # 实际盘：投入=买入流水
+        contributed = invested
+        basis = invested
+    pnl = value - basis
+    irr = None
+    cf = flows if flows is not None else [
+        (tr.day, tr.amount) for tr in trades if tr.action == "buy"]
+    if cf and len(cf) >= 20:
+        from scripts.dca import xirr
+        irr = xirr(cf, value, last_day)
+    return {
+        "units": units, "invested": basis, "fees": fees,
+        "holdings": holdings, "cash": cash,
+        "last_price": px, "last_day": str(last_day),
+        "value": value, "pnl": pnl,
+        "pnl_pct": (pnl / basis) if basis else None,
+        "avg_cost": (invested / units) if units else None,
+        "xirr": irr, "trades": len(trades),
+    }
+
+
+def realized_vol(prices: list[float], window: int = 60) -> float | None:
+    """最近 window 日已实现年化波动。"""
+    if len(prices) < window + 1:
+        return None
+    rets = [math.log(prices[i] / prices[i - 1])
+            for i in range(len(prices) - window, len(prices))]
+    m = sum(rets) / len(rets)
+    var = sum((r - m) ** 2 for r in rets) / (len(rets) - 1)
+    return math.sqrt(var) * math.sqrt(TRADING_DAYS)
+
+
+def next_trading_days(last_day: date, n: int = 3) -> list[date]:
+    """未来 n 个交易日（只跳周末；法定节假日未建模，需人工留意）。"""
+    out: list[date] = []
+    d = last_day
+    while len(out) < n:
+        d += timedelta(days=1)
+        if d.weekday() < 5:
+            out.append(d)
+    return out
+
+
+def outlook(
+    *, code: str, plan: str, params: dict, days: list[date],
+    prices: list[float], prem: dict[date, float],
+    pending_cash: float, units: float, buckets: list[dict] | None = None,
+    cash: float = 0.0,
+    n_days: int = 3,
+) -> dict:
+    """未来 n 个交易日的**预案**（不是价格预测）。
+
+    返回每日：动作（买/停）、触发条件、波动率区间（对账户市值）、
+    以及当前溢价状态对应的历史前向收益分布。
+    """
+    gate = float(params.get("gate", GATE_THRESH))
+    daily = float(params.get("daily", 200.0))
+    last_day = days[-1]
+    last_px = prices[-1]
+    vol = realized_vol(prices)
+    sigma_day = (vol / math.sqrt(TRADING_DAYS)) if vol else None
+    cur_prem = prem.get(last_day)
+
+    # 当前溢价所处桶的历史前向收益（实证，非预测）
+    stat = None
+    for b in (buckets or []):
+        lo_hi = {
+            "<0%": (-9.9, 0.0), "0~1%": (0.0, 0.01), "1~2%": (0.01, 0.02),
+            "2~5%": (0.02, 0.05), ">5%": (0.05, 9.9),
+        }.get(b["label"])
+        if lo_hi and cur_prem is not None and lo_hi[0] <= cur_prem < lo_hi[1]:
+            stat = {"bucket": b["label"], "n": b["n"], "fwd1": b["fwd1"],
+                    "fwd5": b["fwd5"]}
+            break
+
+    upcoming = next_trading_days(last_day, n_days)
+    rows = []
+    for i, d in enumerate(upcoming):
+        # 预案：只用当前已知状态推演（溢价未知 → 给条件式预案）
+        if plan == "naive" or plan == "monthly":
+            may_buy = True
+            cond = "按计划买入"
+        elif cur_prem is not None and cur_prem > gate:
+            may_buy = False
+            cond = f"溢价回落到 ≤{gate:.0%} 才恢复买入（当前 {cur_prem:+.2%}）"
+        else:
+            may_buy = True
+            cond = f"溢价维持 ≤{gate:.0%} 则买入；升破则暂停"
+        sigma_n = sigma_day * math.sqrt(i + 1) if sigma_day else None
+        rows.append({
+            "day": str(d), "weekday": "一二三四五六日"[d.weekday()],
+            "action": "买入" if may_buy else "暂停",
+            "condition": cond,
+            "amount": daily if may_buy else 0.0,
+            "pending_if_pause": pending_cash + daily * (i + 1)
+            if not may_buy else pending_cash,
+            "value_low": (cash + units * last_px * (1 - sigma_n))
+            if sigma_n else None,
+            "value_high": (cash + units * last_px * (1 + sigma_n))
+            if sigma_n else None,
+        })
+
+    return {
+        "code": code, "plan": plan, "plan_label": plan_label(plan),
+        "as_of": str(last_day), "current_premium": cur_prem,
+        "premium_stat": stat, "vol_ann": vol,
+        "sigma_day": sigma_day,
+        "rows": rows,
+        "disclaimer": "本预案不含价格方向预测（历史检验：趋势择时全线失效，"
+                      "docs/04/05/08/12）。区间为波动率统计带（±1σ），"
+                      "触发条件为闸门规则。",
+    }

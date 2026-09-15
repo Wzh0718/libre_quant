@@ -22,6 +22,7 @@ const NAV = [
   { to: "/replay", label: "复盘模拟" },
   { to: "/review", label: "历史复盘" },
   { to: "/shadow", label: "影子盘" },
+  { to: "/accounts", label: "我的盘" },
 ];
 
 // ---- 标的检索（输入基金/股票代码 → 拉历史 → 跑盘）
