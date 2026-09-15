@@ -157,6 +157,110 @@ def create_app(*, with_scheduler: bool = False) -> FastAPI:
         finally:
             conn.close()
 
+    @app.get("/api/decomp")
+    def decomp(code: str = "159941") -> dict:
+        """场外因素分解：标的 / 汇率 / 费用残差 / 溢价效应（docs/11）。"""
+        from libre_quant import store
+        from libre_quant.decomp import return_decomposition
+        from scripts.qdii_pricing import US_PROXY
+
+        conn = store.connect()
+        try:
+            days, raw, adj = store.load_prices(conn, code)
+            navs = store.load_navs(conn, code)
+            if not navs:
+                return {"code": code, "name": _name_of(code), "n": 0,
+                        "note": "该标的无净值序列（美股标的本身即底层）"}
+            fx = store.load_macro(conn, "usdcnh") or None
+            us = US_PROXY.get(code)
+            underlying = None
+            if us:
+                ud, uc = store.load_closes(conn, us)
+                underlying = dict(zip(ud, uc))
+            else:
+                fx = None  # 境内 ETF 无汇率暴露，不参与分解
+            r = return_decomposition(navs, underlying=underlying, fx=fx,
+                                     price_adj=dict(zip(days, adj)))
+            r.update({"code": code, "name": _name_of(code),
+                      "underlying_code": us, "fx_code": "usdcnh" if fx else None})
+            return r
+        finally:
+            conn.close()
+
+    @app.get("/api/replay")
+    def replay(code: str = "159941", fill: str = "close") -> dict:
+        """逐日定投复盘：四变体重放 + 每日流水账（近 60 日）+ 净值曲线。"""
+        from libre_quant import store
+        from libre_quant.config import get_settings
+        from libre_quant.replay import replay_variants
+        from scripts.monthly_ma import (
+            daily_positions, month_series, monthly_sig,
+        )
+
+        conn = store.connect()
+        try:
+            days, raw, adj = store.load_prices(conn, code)
+            prem = store.load_premiums(conn, code)
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT open, high, low FROM price WHERE code = %s "
+                    "ORDER BY day", (code,))
+                ohl = cur.fetchall()
+            opens = [float(r[0]) if r[0] is not None else None for r in ohl]
+            highs = [float(r[1]) if r[1] is not None else None for r in ohl]
+            lows = [float(r[2]) if r[2] is not None else None for r in ohl]
+            keys, mcloses = month_series(days, adj)
+            ma5 = daily_positions(days, keys, monthly_sig(keys, mcloses, 5))
+            s = get_settings()
+            out = replay_variants(
+                days, adj, raw, prem, rate=s.trading_fee_rate,
+                min_fee=s.trading_fee_min, above_ma5=ma5, fill=fill,
+                opens=opens, highs=highs, lows=lows)
+
+            step = max(1, len(days) // 600)
+            for arm in out["arms"].values():
+                arm["curve"] = arm["curve"][::step]
+                arm["journal"] = arm["journal"][-60:]
+            out["curve_days"] = out["days"][::step]
+            out.pop("days", None)
+            out.update({"code": code, "name": _name_of(code),
+                        "span": [str(days[0]), str(days[-1])]})
+            return out
+        finally:
+            conn.close()
+
+    @app.get("/api/live")
+    def live(code: str = "159941") -> dict:
+        """盘中实时判定：现价 vs 最近已公布净值 → 实时溢价与闸门。"""
+        from datetime import datetime
+
+        from libre_quant import store
+        from libre_quant.data.quotes import fetch_spot
+        from libre_quant.shadow import gate_decision
+
+        conn = store.connect()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT day, nav_day_used, nav_used FROM premium "
+                    "WHERE code = %s ORDER BY day DESC LIMIT 1", (code,))
+                row = cur.fetchone()
+        finally:
+            conn.close()
+        nav_used = float(row[2]) if row else None
+        nav_day = str(row[1]) if row else None
+
+        spot = fetch_spot([code]).get(code)
+        price = spot.last if spot else None
+        prem = (price / nav_used - 1) if (price and nav_used) else None
+        return {
+            "code": code, "name": _name_of(code),
+            "ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "price": price, "nav_used": nav_used, "nav_day": nav_day,
+            "premium": prem, "gate": gate_decision(prem),
+            "note": "盘中实时（收盘前参考；日终以入库的收盘价为准）",
+        }
+
     @app.get("/api/health")
     def health() -> dict:
         return {"ok": True}

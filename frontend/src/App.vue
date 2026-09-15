@@ -19,6 +19,7 @@ watch(selectedCode, (c) => {
 const NAV = [
   { to: "/today", label: "今日决策" },
   { to: "/analysis", label: "深度分析" },
+  { to: "/replay", label: "复盘模拟" },
   { to: "/review", label: "历史复盘" },
   { to: "/shadow", label: "影子盘" },
 ];

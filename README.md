@@ -80,7 +80,8 @@ uv run python scripts/serve.py --once
 uv run python scripts/serve.py --catchup
 
 # 可视化看板（FastAPI + Vue3/ECharts，生产形态单端口）
-# 四页：今日决策（推理链）/ 深度分析（溢价分桶证据）/ 历史复盘（策略对比+定投）/ 影子盘
+# 五页：今日决策（推理链+盘中实时）/ 深度分析（溢价分桶+场外因素分解）/
+#       复盘模拟（逐日流水账）/ 历史复盘（策略对比+定投）/ 影子盘
 uv run python scripts/api.py --port 8321            # http://localhost:8321
 
 # 前端开发（Vite 热更新，/api 代理到 8321）
@@ -112,7 +113,8 @@ libre_quant/
 │   ├── 07-qdii-findings.md      QDII 定价/溢价/风控复检（Phase 2 结论）
 │   ├── 08-monthly-ma.md         5月线择时复检（用户预期策略验证）
 │   ├── 09-dca.md                每日定投复检（用户方案：159941 日投 200）
-│   └── 10-shadow.md             影子盘方法论与晋升标准（champion-challenger）
+│   ├── 10-shadow.md             影子盘方法论与晋升标准（champion-challenger）
+│   └── 11-decomp-replay.md      场外因素分解（标的/汇率/费用/溢价）+ 逐日定投复盘
 ├── scripts/
 │   ├── p0_spike.py              PCF 可得性验收
 │   ├── p0_weights.py            PCF + 价格 → 精确权重
@@ -126,6 +128,7 @@ libre_quant/
 │   ├── shadow.py                影子盘：每日步进 + 晋升检查单（--report）
 │   ├── dashboard.py             静态看板兜底（build_data 是 API/看板共用数据源）
 │   ├── api.py                   FastAPI + 看板托管入口（--with-scheduler 单容器形态）
+│   ├── replay.py                逐日定投复盘引擎（四变体 + 每日流水账）
 │   └── ingest.py                数据采集入库（--dry-run 冒烟 / --init-db）
 ├── src/libre_quant/
 │   ├── config.py                pydantic-settings 集中配置（.env）

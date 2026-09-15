@@ -25,6 +25,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from libre_quant import store, universe  # noqa: E402
+from libre_quant.data import macro  # noqa: E402
 from libre_quant.data.nav import fetch_nav_history  # noqa: E402
 from libre_quant.data.quotes import fetch_daily_all  # noqa: E402
 from libre_quant.data.us import fetch_us_daily  # noqa: E402
@@ -87,6 +88,18 @@ def run(codes: list[str], *, dry_run: bool, init_db: bool, end: date) -> int:
                 d, nd, pr = latest[0]
                 tip = f"  最新 {d}: {pr:+.2%} (nav {nd}, lag={asset.nav_lag_days})"
             print(f"[prem]  {asset.code:<7} 刷新 {n} 行{tip}")
+
+    # -- 场外因子（宏观日线：汇率/纳指/恒生；与标的列表无关，总是更新）------
+    for series, (_, label) in macro.SERIES.items():
+        try:
+            pts = macro.fetch_macro(series, date(2005, 1, 1), end)
+            span = f"{pts[0].day} ~ {pts[-1].day}" if pts else "-"
+            print(f"[macro] {series:<7} {label:<14} {len(pts):>5} 根  {span}")
+            if conn is not None:
+                n = store.upsert_macro(conn, series, pts)
+                print(f"        ↑ 入库 {n} 行")
+        except Exception as e:  # noqa: BLE001 —— 场外因子失败不阻塞主链路
+            print(f"[macro] {series:<7} 失败：{str(e)[:70]}")
 
     if conn is not None:
         conn.close()

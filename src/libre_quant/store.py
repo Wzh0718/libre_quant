@@ -83,6 +83,25 @@ CREATE TABLE IF NOT EXISTS shadow_log (
     PRIMARY KEY (code, day, arm)
 );
 COMMENT ON TABLE shadow_log IS '影子账本逐日快照（两臂并行）；状态从 day < T 的最近一行加载后重放，upsert 幂等';
+
+CREATE TABLE IF NOT EXISTS macro (
+    series     TEXT  NOT NULL,            -- usdcnh / ndx / hsi
+    day        DATE  NOT NULL,
+    close      REAL  NOT NULL,
+    source     TEXT  NOT NULL DEFAULT 'eastmoney',
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (series, day)
+);
+COMMENT ON TABLE macro IS '场外因子日线：离岸人民币、纳斯达克100、恒生（docs/11 收益分解用）';
+
+CREATE TABLE IF NOT EXISTS intraday (
+    code       TEXT  NOT NULL,
+    ts         TIMESTAMPTZ NOT NULL,
+    open REAL, high REAL, low REAL, close REAL, volume REAL,
+    source     TEXT  NOT NULL DEFAULT 'eastmoney',
+    PRIMARY KEY (code, ts)
+);
+COMMENT ON TABLE intraday IS '5 分钟线（东财，约 2 个月滚动窗口）：盘中判定与成交价现实性检验';
 """
 
 
@@ -346,10 +365,78 @@ def load_premiums(conn, code: str) -> dict[date, float]:
         return {r[0]: float(r[1]) for r in cur.fetchall()}
 
 
+# ---------------------------------------------------------------- 场外/日内
+
+def upsert_macro(conn, series: str, points: list) -> int:
+    """points: MacroPoint 列表（day/close）。"""
+    if not points:
+        return 0
+    with conn.cursor() as cur:
+        cur.executemany(
+            """
+            INSERT INTO macro (series, day, close) VALUES (%s, %s, %s)
+            ON CONFLICT (series, day) DO UPDATE SET
+                close = EXCLUDED.close, updated_at = now()
+            """,
+            [(series, p.day, p.close) for p in points],
+        )
+        n = cur.rowcount
+    conn.commit()
+    return n
+
+
+def load_macro(conn, series: str,
+               start: date | None = None,
+               end: date | None = None) -> dict[date, float]:
+    q = "SELECT day, close FROM macro WHERE series = %s"
+    params: list = [series]
+    if start:
+        q += " AND day >= %s"
+        params.append(start)
+    if end:
+        q += " AND day <= %s"
+        params.append(end)
+    with conn.cursor() as cur:
+        cur.execute(q + " ORDER BY day", params)
+        return {r[0]: float(r[1]) for r in cur.fetchall()}
+
+
+def upsert_intraday(conn, code: str, bars: list) -> int:
+    """bars: IntradayBar 列表。"""
+    if not bars:
+        return 0
+    with conn.cursor() as cur:
+        cur.executemany(
+            """
+            INSERT INTO intraday (code, ts, open, high, low, close, volume)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (code, ts) DO UPDATE SET
+                open = EXCLUDED.open, high = EXCLUDED.high,
+                low = EXCLUDED.low, close = EXCLUDED.close,
+                volume = EXCLUDED.volume
+            """,
+            [(code, b.ts, b.open, b.high, b.low, b.close, b.volume)
+             for b in bars],
+        )
+        n = cur.rowcount
+    conn.commit()
+    return n
+
+
+def load_intraday(conn, code: str, day: date) -> list[tuple]:
+    """某日 5 分钟线（ts, open, high, low, close），升序。"""
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT ts, open, high, low, close FROM intraday "
+            "WHERE code = %s AND ts::date = %s ORDER BY ts", (code, day))
+        return cur.fetchall()
+
+
 __all__ = [
     "SCHEMA_SQL", "connect", "init_db",
     "upsert_prices", "upsert_navs", "refresh_premium",
     "load_closes", "load_prices", "load_navs", "load_premiums",
+    "upsert_macro", "load_macro", "upsert_intraday", "load_intraday",
     "premium_latest",
     "signal_upsert", "shadow_state_before", "shadow_upsert",
     "shadow_history", "signal_history",

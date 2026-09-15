@@ -1,11 +1,15 @@
 <script setup lang="ts">
 import { onMounted, ref, watch } from "vue";
-import { fetchAnalysis, fmtPct, type AnalysisData } from "../api";
+import {
+  fetchAnalysis, fetchDecomp, fmtPct,
+  type AnalysisData, type DecompData,
+} from "../api";
 import MultiLineChart from "../components/MultiLineChart.vue";
 import { selectedCode } from "../store";
 import { CHART_COLORS } from "../useChart";
 
 const data = ref<AnalysisData | null>(null);
+const decomp = ref<DecompData | null>(null);
 const error = ref<string | null>(null);
 const loading = ref(true);
 
@@ -13,7 +17,12 @@ async function load() {
   loading.value = true;
   error.value = null;
   try {
-    data.value = await fetchAnalysis(selectedCode.value);
+    const [a, d] = await Promise.all([
+      fetchAnalysis(selectedCode.value),
+      fetchDecomp(selectedCode.value),
+    ]);
+    data.value = a;
+    decomp.value = d;
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e);
   } finally {
@@ -68,6 +77,56 @@ watch(selectedCode, load);
           </tr>
         </tbody>
       </table>
+    </div>
+
+    <h2>场外因素分解（QQQ / 汇率 / 费用 / 溢价，docs/11）</h2>
+    <template v-if="decomp && decomp.period">
+      <div class="card">
+        <div class="muted">
+          区间 {{ decomp.period.span[0] }} ~ {{ decomp.period.span[1] }}（{{ decomp.n }} 个净值日，
+          剔除份额折算 {{ decomp.skipped_events }} 天）
+        </div>
+        <table style="margin-top:8px">
+          <thead><tr><th>来源</th><th>区间收益</th><th>说明</th></tr></thead>
+          <tbody>
+            <tr><td>场内价格（前复权）</td>
+              <td class="num">{{ fmtPct(decomp.period.price_total ?? null, 1) }}</td>
+              <td class="muted">你实际拿到的（份额口径）</td></tr>
+            <tr><td>净值（CNY）</td>
+              <td class="num">{{ fmtPct(decomp.period.nav_total, 1) }}</td>
+              <td class="muted">基金资产的真实增值</td></tr>
+            <tr v-if="decomp.period.underlying_total != null">
+              <td>├─ 标的 {{ decomp.underlying_code?.toUpperCase() }}</td>
+              <td class="num">{{ fmtPct(decomp.period.underlying_total, 1) }}</td>
+              <td class="muted">美股底层涨跌（美元计）</td></tr>
+            <tr v-if="decomp.period.fx_total != null">
+              <td>├─ 汇率 USDCNH</td>
+              <td class="num">{{ fmtPct(decomp.period.fx_total, 1) }}</td>
+              <td class="muted">人民币升贬的额外损益（尾部保险，非收益引擎）</td></tr>
+            <tr v-if="decomp.period.resid_total != null">
+              <td>└─ 费用/跟踪残差</td>
+              <td class="num">{{ fmtPct(decomp.period.resid_total, 1) }}</td>
+              <td class="muted">管理费+托管+跟踪误差的长期拖累</td></tr>
+            <tr><td>溢价效应（价格 ÷ 净值）</td>
+              <td class="num">{{ fmtPct(decomp.period.premium_effect ?? null, 1) }}</td>
+              <td class="muted">高溢价买入 = 白送；低溢价/折价买入 = 白赚</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="grid cards" style="margin-top:12px">
+        <div class="card"><div class="muted">标的解释的波动占比</div>
+          <div class="big num">{{ fmtPct(decomp.var_share?.underlying ?? null, 1, false) }}</div>
+          <div class="muted">相关 {{ (decomp.corr?.underlying ?? 0).toFixed(3) }}</div></div>
+        <div class="card"><div class="muted">汇率解释的波动占比</div>
+          <div class="big num">{{ fmtPct(decomp.var_share?.fx ?? null, 1, false) }}</div>
+          <div class="muted">相关 {{ (decomp.corr?.fx ?? 0).toFixed(3) }}（近零/负 = 不驱动波动）</div></div>
+        <div class="card"><div class="muted">残差（费用/跟踪）</div>
+          <div class="big num">{{ fmtPct(decomp.resid_var_share ?? null, 1, false) }}</div>
+          <div class="muted">无法被场外因子解释的部分</div></div>
+      </div>
+    </template>
+    <div v-else class="card muted">
+      {{ decomp?.note ?? "该标的无场外因子分解（境内 ETF 无汇率暴露）" }}
     </div>
 
     <h2>价格 vs 净值（近两年，归一=100）</h2>

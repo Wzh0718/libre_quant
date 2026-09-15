@@ -1,11 +1,25 @@
 <script setup lang="ts">
 import { onMounted, ref, watch } from "vue";
-import { fetchToday, fmtPct, fmtYuan, type TodayCard } from "../api";
+import {
+  fetchLive, fetchToday, fmtPct, fmtYuan,
+  type LiveData, type TodayCard,
+} from "../api";
 import { selectedCode } from "../store";
 
 const data = ref<TodayCard | null>(null);
+const live = ref<LiveData | null>(null);
+const liveErr = ref<string | null>(null);
 const error = ref<string | null>(null);
 const loading = ref(true);
+
+async function loadLive() {
+  liveErr.value = null;
+  try {
+    live.value = await fetchLive(selectedCode.value);
+  } catch (e) {
+    liveErr.value = e instanceof Error ? e.message : String(e);
+  }
+}
 
 async function load() {
   loading.value = true;
@@ -17,6 +31,7 @@ async function load() {
   } finally {
     loading.value = false;
   }
+  void loadLive();
 }
 onMounted(load);
 watch(selectedCode, load);
@@ -38,6 +53,30 @@ watch(selectedCode, load);
         <span v-if="data.gate === 'pause'" class="badge badge-pause">暂停买入</span>
         <span v-else class="badge badge-buy">正常买入 {{ fmtYuan(data.planned) }} 元</span>
         <span class="muted">待投现金 {{ fmtYuan(data.pending) }} 元</span>
+      </div>
+    </div>
+
+    <h2>盘中实时（时效性：收盘前可判定）</h2>
+    <div class="card">
+      <div v-if="live && live.price" style="display:flex;gap:16px;align-items:center;flex-wrap:wrap">
+        <div>
+          <span class="big num">{{ fmtPct(live.premium) }}</span>
+          <span class="muted"> 实时溢价</span>
+        </div>
+        <span v-if="live.gate === 'pause'" class="badge badge-pause">暂停买入</span>
+        <span v-else class="badge badge-buy">正常买入</span>
+        <span class="muted">
+          现价 <span class="num">{{ live.price.toFixed(3) }}</span> ·
+          最近净值 <span class="num">{{ live.nav_used?.toFixed(4) }}</span>（{{ live.nav_day }}）·
+          {{ live.ts }}
+        </span>
+      </div>
+      <div v-else class="muted">
+        {{ liveErr ? `实时行情暂不可用（${liveErr}）` : "非交易时段或暂无实时报价" }}
+        <button class="badge badge-hold" style="cursor:pointer;margin-left:8px" @click="loadLive">重试</button>
+      </div>
+      <div class="muted" style="margin-top:8px;font-size:12px">
+        {{ live?.note ?? "盘中实时（收盘前参考；日终以入库收盘价为准）" }}
       </div>
     </div>
 

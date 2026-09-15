@@ -147,6 +147,95 @@ export const fetchAnalysis = (code: string) =>
 export const fetchReview = (code: string) =>
   getJson<ReviewData>(`/api/review?code=${code}`);
 
+// ---------------------------------------------------------------- 场外/复盘/实时
+
+export interface DecompPeriod {
+  price_total?: number;
+  nav_total: number;
+  nav_total_naive: number;
+  underlying_total?: number;
+  fx_total?: number;
+  resid_total?: number;
+  premium_effect?: number;
+  span: [string, string];
+}
+
+export interface DecompData {
+  code: string;
+  name: string;
+  n: number;
+  skipped_events: number;
+  event_days?: string[];
+  underlying_code?: string | null;
+  fx_code?: string | null;
+  note?: string;
+  period?: DecompPeriod;
+  days?: string[];
+  contrib_ann?: Record<string, number>;
+  corr?: Record<string, number>;
+  var_share?: Record<string, number>;
+  cum?: Record<string, number[]>;
+  resid_var_share?: number;
+}
+
+export interface ReplaySummary {
+  invested: number;
+  value: number;
+  fees: number;
+  pending: number;
+  buys: number;
+  pauses: number;
+  xirr: number | null;
+  max_dd: number;
+  avg_buy_premium: number | null;
+}
+
+export interface JournalRow {
+  day: string;
+  premium: number | null;
+  gate: "buy" | "pause";
+  action: string;
+  planned: number;
+  bought: number;
+  pending: number;
+  invested: number;
+  value: number;
+}
+
+export interface ReplayArm {
+  summary: ReplaySummary;
+  curve: number[];
+  journal: JournalRow[];
+}
+
+export interface ReplayData {
+  code: string;
+  name: string;
+  span: [string, string];
+  fill: string;
+  curve_days: string[];
+  arms: Record<string, ReplayArm>;
+}
+
+export interface LiveData {
+  code: string;
+  name: string;
+  ts: string;
+  price: number | null;
+  nav_used: number | null;
+  nav_day: string | null;
+  premium: number | null;
+  gate: "buy" | "pause";
+  note: string;
+}
+
+export const fetchDecomp = (code: string) =>
+  getJson<DecompData>(`/api/decomp?code=${code}`);
+export const fetchReplay = (code: string, fill = "close") =>
+  getJson<ReplayData>(`/api/replay?code=${code}&fill=${fill}`);
+export const fetchLive = (code: string) =>
+  getJson<LiveData>(`/api/live?code=${code}`);
+
 export const fmtPct = (x: number | null, digits = 2, sign = true): string =>
   x == null ? "n/a" : sign ? `${(x * 100).toFixed(digits).replace(/^([^-+])/, "+$1")}%` : `${(x * 100).toFixed(digits)}%`;
 
