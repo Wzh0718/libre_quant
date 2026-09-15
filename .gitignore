@@ -16,3 +16,4 @@ wheels/
 .pytest_cache/
 .ruff_cache/
 backtest-latest.txt
+web/

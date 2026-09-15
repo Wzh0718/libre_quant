@@ -78,6 +78,9 @@ uv run python scripts/serve.py --once
 
 # 常驻采集服务（容器/Komodo 形态，内嵌 APScheduler 替代 cron）
 uv run python scripts/serve.py --catchup
+
+# 可视化看板（手动重建；常驻模式下每日自动刷新，http://localhost:8000/dashboard.html）
+uv run python scripts/dashboard.py
 ```
 
 配置（PostgreSQL / Tavily 等）用 pydantic-settings 统一管理：
@@ -92,6 +95,7 @@ uv run python -m libre_quant.data.news "光模块 800G 最新进展"   # 需 TAV
 ```
 libre_quant/
 ├── docs/
+│   ├── 00-strategy.md           策略总纲（一页纸，全部规则的权威摘要）
 │   ├── 01-conversation-log.md   研究过程与决策记录
 │   ├── 02-data-sources.md       数据源技术档案（全部实测）
 │   ├── 03-methodology.md        因子验证方法论
