@@ -99,7 +99,8 @@ libre_quant/
 │   ├── 05-attribution.md        精确收益归因（净择时全负的修正）
 │   ├── 06-multi-asset-plan.md   多标的宇宙计划（515880 + QDII）
 │   ├── 07-qdii-findings.md      QDII 定价/溢价/风控复检（Phase 2 结论）
-│   └── 08-monthly-ma.md         5月线择时复检（用户预期策略验证）
+│   ├── 08-monthly-ma.md         5月线择时复检（用户预期策略验证）
+│   └── 09-dca.md                每日定投复检（用户方案：159941 日投 200）
 ├── scripts/
 │   ├── p0_spike.py              PCF 可得性验收
 │   ├── p0_weights.py            PCF + 价格 → 精确权重
@@ -109,6 +110,7 @@ libre_quant/
 │   ├── multi_asset_review.py    Phase 2a 三标的趋势复检
 │   ├── qdii_pricing.py          Phase 2b/2c QDII 定价与溢价研究
 │   ├── monthly_ma.py            5月线择时复检（--n 可调）
+│   ├── dca.py                   定投复检（频率/溢价暂停/佣金敏感性）
 │   └── ingest.py                数据采集入库（--dry-run 冒烟 / --init-db）
 ├── src/libre_quant/
 │   ├── config.py                pydantic-settings 集中配置（.env）
