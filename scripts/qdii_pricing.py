@@ -41,8 +41,8 @@ from scripts.backtest import (  # noqa: E402
     sig_ma_filter_trend,
 )
 
-#: QDII → 美股代理
-US_PROXY = {"513100": "qqq", "513500": "spy"}
+#: QDII → 美股代理（159941 广发为用户实际交易标的）
+US_PROXY = {"513100": "qqq", "513500": "spy", "159941": "qqq"}
 PREM_THRESH = 0.02  # 溢价禁买阈值
 
 
@@ -118,13 +118,16 @@ def run_blocked(closes, days, sig, prem: dict[date, float],
 
 # ---------------------------------------------------------------- 主程序
 
-def main() -> int:
+def main(argv=None) -> int:
+    wanted = {c for c in (argv or []) if c in US_PROXY} or set(US_PROXY)
     print("=" * 96)
     print(f"Phase 2b/2c · QDII 定价与溢价研究   溢价禁买阈值={PREM_THRESH:.0%}   "
           f"成本={COST_PER_SIDE:.2%}/边")
     print("=" * 96)
 
     for code, us_sym in US_PROXY.items():
+        if code not in wanted:
+            continue
         a = UNIVERSE[code]
         # 前复权：收益/相关性/回测（份额折算不影响收益率）
         bars = fetch_all(code, a.data_from, date.today(), adjust="qfq")
@@ -234,4 +237,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(main(sys.argv[1:]))

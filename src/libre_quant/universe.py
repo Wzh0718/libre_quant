@@ -71,6 +71,12 @@ UNIVERSE: dict[str, Asset] = {
         nav_lag_days=2, data_from=date(2013, 5, 1),
         nav_source=SRC_EASTMONEY,
     ),
+    #: 用户实际交易的纳指标的（广发，深交所）。gtfund PCF 不适用（非国泰系）。
+    "159941": Asset(
+        code="159941", name="纳指ETF广发", kind=KIND_QDII_ETF,
+        nav_lag_days=2, data_from=date(2015, 6, 1),
+        nav_source=SRC_EASTMONEY,
+    ),
     "spy": Asset(
         code="spy", name="SPY 标普500 ETF", kind=KIND_US_ETF,
         currency="USD", data_from=date(2001, 1, 2), price_source=SRC_SINA,

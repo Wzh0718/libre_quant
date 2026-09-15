@@ -7,8 +7,8 @@ import pytest
 from libre_quant.universe import UNIVERSE, get, onshore_etfs
 
 
-def test_registry_contains_three_etfs_and_us_sources():
-    assert set(UNIVERSE) >= {"515880", "513500", "513100", "spy", "qqq"}
+def test_registry_contains_expected_assets():
+    assert set(UNIVERSE) >= {"515880", "513500", "513100", "159941", "spy", "qqq"}
 
 
 def test_nav_lag_semantics():
@@ -20,7 +20,7 @@ def test_nav_lag_semantics():
 
 def test_only_onshore_etfs_have_premium():
     etfs = {a.code for a in onshore_etfs()}
-    assert etfs == {"515880", "513500", "513100"}
+    assert etfs == {"515880", "513500", "513100", "159941"}
     assert all(a.currency == "CNY" for a in onshore_etfs())
     assert all(a.currency == "USD" for c, a in UNIVERSE.items() if c in {"spy", "qqq"})
 
