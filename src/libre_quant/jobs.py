@@ -29,7 +29,25 @@ def status() -> dict:
 
 
 def refresh_now(codes: list[str] | None = None) -> dict:
-    """同步跑一轮采集入库（全标的 + 场外因子 + 溢价 + 影子盘）。"""
+    """同步跑一轮采集入库（全标的 + 场外因子 + 溢价 + 影子盘步进）。
+
+    并发防护内置：已在跑则返回 ``{"skipped": ...}``——调度器路径与
+    手动路径共用同一把锁，避免两轮全量抓取叠加触发数据商限流。
+    """
+    with _lock:
+        if _state["running"]:
+            return {"skipped": "刷新已在进行中"}
+        _state["running"] = True
+    try:
+        return _run_once(codes)
+    finally:
+        with _lock:
+            _state["running"] = False
+            _state["last_finished"] = datetime.now().strftime(
+                "%Y-%m-%d %H:%M:%S")
+
+
+def _run_once(codes: list[str] | None = None) -> dict:
     from datetime import date as _date
 
     from libre_quant import store
@@ -69,14 +87,18 @@ def refresh_now(codes: list[str] | None = None) -> dict:
                             f"失败: {str(e)[:60]}"
             except Exception:  # noqa: BLE001
                 pass
+            # 影子盘当日步进（docs/10；失败不影响采集主链路。
+            # 静态看板重建不在此——Docker 形态由 /api/dashboard 动态聚合取代）
+            try:
+                from scripts import shadow as shadow_mod
+                result["shadow"] = shadow_mod.run_daily(conn)
+            except Exception as e:  # noqa: BLE001
+                result["shadow"] = f"失败: {str(e)[:60]}"
         finally:
             conn.close()
         _state["last_result"] = result
     except Exception as e:  # noqa: BLE001
         _state["last_error"] = str(e)[:200]
-    finally:
-        _state["running"] = False
-        _state["last_finished"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     return _state["last_result"] or {}
 
 
@@ -86,5 +108,15 @@ def start_background(codes: list[str] | None = None) -> bool:
         if _state["running"]:
             return False
         _state["running"] = True
-    threading.Thread(target=refresh_now, args=(codes,), daemon=True).start()
+
+    def _target():
+        try:
+            _run_once(codes)
+        finally:
+            with _lock:
+                _state["running"] = False
+                _state["last_finished"] = datetime.now().strftime(
+                    "%Y-%m-%d %H:%M:%S")
+
+    threading.Thread(target=_target, daemon=True).start()
     return True
