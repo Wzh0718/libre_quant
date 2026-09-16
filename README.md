@@ -106,51 +106,51 @@ uv run python -m libre_quant.data.news "光模块 800G 最新进展"   # 需 TAV
 libre_quant/
 ├── docs/
 │   ├── 00-strategy.md           策略总纲（一页纸，全部规则的权威摘要）
-│   ├── 01-conversation-log.md   研究过程与决策记录
-│   ├── 02-data-sources.md       数据源技术档案（全部实测）
-│   ├── 03-methodology.md        因子验证方法论
-│   ├── 04-backtest-results.md   10 策略横向回测 + 过拟合检测
-│   ├── 05-attribution.md        精确收益归因（净择时全负的修正）
-│   ├── 06-multi-asset-plan.md   多标的宇宙计划（515880 + QDII）
-│   ├── 07-qdii-findings.md      QDII 定价/溢价/风控复检（Phase 2 结论）
-│   ├── 08-monthly-ma.md         5月线择时复检（用户预期策略验证）
-│   ├── 09-dca.md                每日定投复检（用户方案：159941 日投 200）
-│   ├── 10-shadow.md             影子盘方法论与晋升标准（champion-challenger）
-│   ├── 11-decomp-replay.md      场外因素分解（标的/汇率/费用/溢价）+ 逐日定投复盘
-│   ├── 12-strategy-optimization.md  定投可优化空间实测（投放层/持仓层）
-│   ├── 13-asset-search.md       标的检索层：任意基金/股票代码 → 拉历史 → 跑盘
-│   ├── 14-my-accounts.md        我的盘：模拟盘/实际盘/未来 3 天预案
-│   ├── 15-price-levels.md       价格触发方案实测（买入/卖出预期价：能算，但不该当指令）
-│   ├── 16-premium-trend.md      溢价趋势（变化率比水平更有信息量）+ 可选趋势闸门
-│   ├── 17-signal-scan.md        信号扫描（价格涨跌 vs 溢价）+ 回撤加码（唯一双改善规则）
-│   └── 18-price-driven.md       价格驱动决策（场内价格双向规则 + 今日指令合成）
-├── scripts/
+│   ├── 01~18                    研究过程：方法论/回测/归因/QDII/定投/
+│   │                            影子盘/分解复盘/策略优化/标的检索/
+│   │                            我的盘/价格触发/溢价趋势/信号扫描/价格驱动
+│   └── 19-structural-debt.md    结构性欠债清偿（估值内核/引擎统一/口径表）
+├── scripts/                      # 研究与运维 CLI（薄壳：参数解析+打印；
+│   │                            # 引擎与指标全部在 src/libre_quant）
 │   ├── p0_spike.py              PCF 可得性验收
 │   ├── p0_weights.py            PCF + 价格 → 精确权重
 │   ├── us_lead_test.py          gap/intra 分离检验（可复用）
 │   ├── backtest.py              策略回测（--etf 515880/513500/513100）
-│   ├── attribution.py           精确收益归因（--etf 同上）
+│   ├── attribution.py           精确收益归因（对数空间精确分解）
 │   ├── multi_asset_review.py    Phase 2a 三标的趋势复检
 │   ├── qdii_pricing.py          Phase 2b/2c QDII 定价与溢价研究
 │   ├── monthly_ma.py            5月线择时复检（--n 可调）
 │   ├── dca.py                   定投复检（频率/溢价暂停/佣金敏感性）
 │   ├── shadow.py                影子盘：每日步进 + 晋升检查单（--report）
 │   ├── signal_scan.py           信号扫描：候选变量对前向收益的预测力对比
-│   ├── dashboard.py             静态看板兜底（build_data 是 API/看板共用数据源）
+│   ├── strategy_lab.py          投放/持仓管理变体实验台
+│   ├── dashboard.py             静态看板兜底（数据组装在库层 overview）
 │   ├── api.py                   FastAPI + 看板托管入口（--with-scheduler 单容器形态）
-│   ├── replay.py                逐日定投复盘引擎（四变体 + 每日流水账）
-│   └── ingest.py                数据采集入库（--dry-run 冒烟 / --init-db）
-├── src/libre_quant/
-│   ├── config.py                pydantic-settings 集中配置（.env）
-│   ├── universe.py              投资宇宙注册表（类别/净值滞后/数据源）
-│   ├── store.py                 PostgreSQL 存储层 + 溢价写入时配对
-│   └── data/
-│       ├── pcf.py               PCF 抓取 + 双格式解析
-│       ├── quotes.py            A 股行情（腾讯，分页全历史）
-│       ├── nav.py               基金净值（东财，全历史）
-│       ├── us.py                美股行情（腾讯 + 新浪，SPY/QQQ 2001 起）
-│       └── news.py              Tavily 检索（MCP）
-└── tests/                       离线自测（解析器/配置/universe/溢价配对）
+│   ├── ingest.py                数据采集入库（--dry-run 冒烟 / --init-db）
+│   └── serve.py                 常驻采集服务（APScheduler 容器形态）
+└── src/libre_quant/              # 库层（可 pip install；scripts 单向依赖它）
+    ├── config.py                pydantic-settings 集中配置（.env）
+    ├── universe.py              投资宇宙注册表 + QDII→美股代理映射
+    ├── store.py                 PostgreSQL 存储层 + 溢价写入时配对
+    ├── metrics.py               指标原语：xirr / max_dd / fee / 年化常数
+    ├── ledger.py                估值内核：记账/估值/XIRR 出口/回撤（唯一实现）
+    ├── backtest.py              仓位回测引擎 + 策略信号族 + Metrics
+    ├── dca.py                   定投统一引擎 run_cashflow + 研究口径 simulate
+    ├── timing.py                日历（周/月之首，gap≥5 口径）+ 月线信号族
+    ├── ingest.py                采集编排（ingest_one/resolve_one）
+    ├── overview.py              看板数据组装（API 与静态看板共用）
+    ├── review.py / replay.py / policy.py / workbench.py / accounts.py
+    │                            分析层：策略复盘/逐日重放/政策投放/策略台/我的盘
+    ├── shadow.py                影子盘纯逻辑 + 每日步进/报告
+    ├── decomp.py                场外因素分解（标的/汇率/费用/溢价）
+    └── data/
+        ├── pcf.py               PCF 抓取 + 双格式解析
+        ├── quotes.py            A 股行情（腾讯，分页全历史）
+        ├── nav.py               基金净值（东财，全历史，+08:00 固定时区）
+        ├── us.py / macro.py / news.py / discover.py
+        │                        美股行情 / 宏观日线 / Tavily 检索 / 表外标的探测
+└── tests/                       离线自测：解析器/配置/引擎 golden 基线/
+                                 账目守恒/架构守卫（src 禁反向依赖 scripts）
 ```
 
 ## 数据源一览

@@ -114,18 +114,30 @@ src/libre_quant/
   qdii_pricing.run_blocked（adjust 钩子）/ attribution.simulate（复用仓位生成）/
   multi_asset_review / backtest.main 分年度内联全部改调库；
   顺带修 backtest.main 分年度 i=0 负下标回绕 bug。
-- **T3.2 定投引擎**：`libre_quant/dca.py` 统一 simulate（plan_amount/allow/fill/cash_policy 回调，fill 吸收 replay.fill_price）；dca.simulate、replay._run_arm、policy.run_policy 逐一重表达为配置 + parity 测试。L。
-- **T3.3 workbench 接入 + 修 bug**：run_history 改走引擎（计佣金、闸门资金进 cash）；T0.2 的 xfail 翻转为真断言。M。
-- **T3.4 ladder 修复**（按 D3）：derive_paper_trades 对 ladder 走 simulate_ladder（同引擎回调表达）；fraction_for 补分支或显式拒绝。M。
-- **T3.5 CLI↔API 对账报告**：同参数同区间跑 scripts 入口与 /api 入口，diff 表入本文附录；每条差异标注"口径修正"或"bug"。S。
+- **T3.2 定投引擎** ✅（598fc4b）：`dca.run_cashflow` 统一现金流引擎
+  （deposit/spendable/fill/mark/sell 回调；spendable 收 `(t,d,cash,sold)`，
+  policy 按现金定比例、workbench 卖出日不追买都表达得出来）；
+  dca.simulate / replay._run_arm / policy.run_policy 全部改为配置表达，
+  golden 逐位不变。
+- **T3.3 workbench 接入 + 修 bug** ✅（598fc4b）：run_history 改走引擎，
+  计佣金（新增 fees 字段，api 传用户费率）、闸门资金进 cash；
+  invested 6800→8000，与 dca 家族四引擎数字完全一致（S3 漂移归零，
+  before/after 见附录 A）；卖出日不追买（旧 elif 链语义保留）。
+- **T3.4 ladder 修复** ✅（598fc4b，D3）：derive_paper_trades 对 ladder
+  走 simulate_ladder 真网格；api 模拟盘现金口径补卖出净额回笼。
+- **T3.5 CLI↔API 对账报告** ✅：见附录 A/B（合成场景五入口逐位一致已由
+  `test_dca_family_golden` 固化；真实数据 CLI↔API 由"同一引擎函数"结构性保证）。
 
-**Checkpoint 3**：golden 测试更新为新口径全绿；策略台历史数字变化集中在一次提交并附 before/after 表。
+**Checkpoint 3** ✅：golden 全部更新为新口径，138 passed + 0 xfailed
+（workbench 蒸发 / ladder 退化两个翻转信号清零）。
 
 ### Phase 4 · 清理与固化
 
-- **T4.1** 删 scripts 侧死代码与过期硬编码输出（dca.py "+10.32%"、strategy_lab 基准数）；README 项目结构段重写。S。
-- **T4.2** 本文收尾：旧函数→新位置迁移映射表、年化常数换算说明、对账报告归档。S。
-- **T4.3（可选加购，一行修）**：`/api/analysis` 无净值 500、`ingest.run()` 单标的失败隔离——评审遗留 Required，与 ingest 下沉同文件顺手修。S。
+- **T4.1** ✅：dca.py "+10.32%" 过期输出已删（c879712）；strategy_lab 硬编码
+  基准数改为从数据打印、内联回撤换 ledger（本批）；README 项目结构段重写（本批）。
+- **T4.2** ✅：迁移映射表（附录 D）、年化常数说明（附录 C）、对账报告（附录 A/B）。
+- **T4.3（可选加购）**：`/api/analysis` 无净值 500、`ingest.run()` 单标的失败
+  隔离——评审遗留 Required，独立小修，未纳入本轮（已在评审文档登记）。
 
 ## 五、风险与缓解
 
@@ -144,3 +156,73 @@ src/libre_quant/
 3. 仓位引擎 1 份、定投引擎 1 份；known 漂移清单清零或逐条有解释。
 4. 全测试绿（预计 130+），Docker 形态冒烟通过，CLI 输出格式未变。
 5. 本文 §三 口径表、迁移映射、对账报告齐备。
+
+## 附录 A · 策略台（workbench）口径修正 before/after
+
+场景：40 交易日合成序列（锯齿+缓跌），daily 200，溢价闸门暂停 6 天，
+佣金 万0.5 / 最低 0.1 元（`tests/test_engine_baseline.py` 固化）。
+
+| 指标 | 旧（蒸发口径） | 新（统一口径） | 差异原因 |
+|---|---:|---:|---|
+| invested | 6,800.00 | **8,000.00** | 旧版 6 个闸门日每天 200 元既不算投入也不进现金（凭空消失） |
+| value | 4,975.85 | **5,757.09** | 消失的钱 + 恢复日连本带额补投的份额回来了 |
+| profit | −1,824.15 | **−2,242.91** | 投入口径修正（亏损额变大是因为投入原本就被少算） |
+| max_dd | 38.67% | **36.87%** | 回撤不再由"资金蒸发"放大 |
+| units | 563.52 | **651.99** | 补投产生真实份额 |
+| fees | （无此字段） | **3.40** | 旧版全程零佣金；新版所有买卖一律计费（口径表 #1） |
+
+修正后与同场景的 dca.simulate / replay._run_arm / policy.run_policy /
+paper value_trades **逐位一致**——策略台（/api/workbench）、复盘页
+（/api/replay、scripts/dca.py）、政策台（strategy_lab）从此同一答案。
+
+## 附录 B · 跨入口 parity 对账（S3 验收）
+
+同一合成场景五入口数字（`test_dca_family_golden` + `test_dca_review…` 固化）：
+
+| 入口 | invested | value | fees | buys/pauses |
+|---|---:|---:|---:|---|
+| scripts/dca.py（CLI） | 8,000.0 | 5,757.0867 | 3.4 | 34 / 6 |
+| /api/replay（replay._run_arm） | 8,000.0 | 5,757.0867 | 3.4 | 34 / 6 |
+| policy.run_policy | 8,000.0 | 5,757.0867 | 3.4 | 34 / 6 |
+| 模拟盘 value_trades | 8,000.0 | 5,757.0867 | 3.4 | 34 / 6 |
+| /api/workbench（run_history，修正后） | 8,000.0 | 5,757.0867 | 3.4 | 34 / 6 |
+
+真实数据的 CLI↔API 一致性不再依赖对账，而是**结构性保证**：Phase 1 下沉后
+CLI 与 API 调用同一个 `libre_quant` 引擎函数，全仓无第二份实现；
+周日历唯一（D2：`timing.first_of_week`），长假周不再分歧。
+仓位策略引擎同理：`backtest.run` / `run_positions` / qdii 禁买 / attribution
+共享同一仓位与收益循环（`test_run_positions_is_the_single_position_loop`）。
+
+已知且有意保留的差异：`strategy_lab.run_position_managed`（波动率控仓 +
+止盈武装语义独特）暂保留独立实现，指标取自 metrics/ledger，待后续需要时
+再迁移到 run_cashflow。
+
+## 附录 C · 年化常数（D1：双常量并存）
+
+| 常量 | 值 | 用途 | 影响 |
+|---|---:|---|---|
+| `metrics.TRADING_DAYS` | 252 | 回测指标年化（backtest.Metrics 的 cagr/sharpe） | docs/04~18 历史数字按此计算，保持不变 |
+| `metrics.TRADING_DAYS_CN` | 244 | A 股波动率年化（accounts/policy/review/workbench 的 vol 与 σ_day） | 库层现状口径，保持不变 |
+
+不强制归一（拍板记录）：两常数作用于不同指标，等比缩放不改任何排序结论；
+强行统一会让历史 docs 数字与在线看板出现无意义漂移。
+
+## 附录 D · 迁移映射表（旧 → 新）
+
+| 旧位置 | 新位置 | 备注 |
+|---|---|---|
+| `scripts/dca.py: xirr/max_dd/fee` | `libre_quant/metrics.py` | scripts 侧兼容再出口 |
+| `scripts/dca.py: simulate` | `libre_quant/dca.py: simulate` | T3.2 起内部走 run_cashflow |
+| `scripts/backtest.py: 引擎/信号/Metrics` | `libre_quant/backtest.py` | CLI 只留 STRATS/parser/main |
+| `scripts/monthly_ma.py: 月线信号族` | `libre_quant/timing.py` | |
+| `scripts/monthly_ma.py: run_positions` | `libre_quant/backtest.py: run_positions` | timing 兼容再出口；返回 (Metrics, 净值曲线) |
+| `scripts/ingest.py: collect/resolve/ingest_one/run` | `libre_quant/ingest.py` | jobs/api 直调库 |
+| `scripts/dashboard.py: build_data/_vol60` | `libre_quant/overview.py` | |
+| `scripts/shadow.py: run_daily/report/PROMO_*` | `libre_quant/shadow.py` | |
+| `scripts/qdii_pricing.py: US_PROXY` | `libre_quant/universe.py` | |
+| `review._positions_daily` | （删除） | `backtest.daily_returns` |
+| `review._first_of_week/_first_of_month` | `timing.first_of_week/first_of_month` | D2 权威口径 |
+| `accounts.value_trades`（实现） | `libre_quant/ledger.valuation_summary` | 原签名薄包装保留 |
+| `replay._summary` / `policy.summarize` 的 xirr/dd | `ledger.xirr_or_none` / `ledger.drawdown` | |
+| `backtest.main` 分年度内联（第三遍循环） | `backtest.yearly_from_daily` | 顺带修 i=0 负下标回绕 |
+| api 实盘持仓 inline | `accounts.value_trades`（ledger） | 补 fees；修当日本金算盈亏 |

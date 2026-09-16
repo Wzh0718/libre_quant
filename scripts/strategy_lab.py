@@ -214,10 +214,8 @@ def run_position_managed(days, adj, prem, *, policy, rate, min_fee,
 
         value = units * adj[t] + cash
         curve.append(round(value, 4))
-    peak, dd = float("-inf"), 0.0
-    for v in curve:
-        peak = max(peak, v)
-        dd = max(dd, 1 - v / peak if peak > 0 else 0.0)
+    from libre_quant.ledger import drawdown
+    dd = drawdown(curve)
     irr = _xirr([(d, planned) for d in days], curve[-1], days[-1])
     return {"invested": invested, "value": curve[-1], "fees": fees,
             "cash": cash, "buys": buys, "sells": sells, "pauses": pauses,
@@ -248,7 +246,9 @@ def position_lab(series, days, adj, prem, kw, base):
         print(f"{name:<20}{r['value']:>12,.0f}{r['xirr']:>9.2%}"
               f"{r['max_dd']:>8.1%}{r['sells']:>7}{r['cash']:>10,.0f}")
     print()
-    print("对照：朴素日投基准 XIRR 19.77% / 回撤 30.2%")
+    if base:
+        print(f"对照：朴素日投基准 XIRR {base['xirr']:.2%} / "
+              f"回撤 {base['max_dd']:.1%}")
     for name, r in out.items():
         print(f"  {name:<20} 价值 {(r['value'] - base['value']):+,.0f} 元"
               f"   XIRR {(r['xirr'] - base['xirr']):+.2%}"
