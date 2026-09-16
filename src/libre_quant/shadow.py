@@ -15,7 +15,7 @@ from dataclasses import dataclass
 
 from libre_quant import store
 from libre_quant.config import get_settings
-from libre_quant.metrics import xirr
+from libre_quant.ledger import xirr_or_none
 
 #: 溢价闸门阈值（docs/07 §三）
 GATE_THRESH = 0.05
@@ -145,7 +145,7 @@ def report(conn, code: str = "159941") -> int:
         latest = hist[-1]
         invested, fees, value = float(latest[3]), float(latest[4]), float(latest[5])
         cashflows = [(d, float(p)) for d, _, _, p in signals]
-        irr = xirr(cashflows, value, last) if days_run >= 20 else None
+        irr = xirr_or_none(cashflows, value, last)
         irr_s = f"{irr:+.2%}" if irr is not None else "样本<20日不判"
         pend = f"  待投现金 {float(latest[2]):.0f} 元" if arm == "gate" else ""
         print(f"  [{arm:<5}] 投入 {invested:.0f}  市值+现金 {value:.0f}"

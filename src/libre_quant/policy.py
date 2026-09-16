@@ -15,7 +15,6 @@ from __future__ import annotations
 import math
 from datetime import date
 
-from libre_quant.metrics import xirr
 from libre_quant.shadow import GATE_THRESH
 
 TRADING_DAYS = 244
@@ -86,17 +85,14 @@ def run_policy(
 
 
 def summarize(days: list[date], arm: dict, planned: float = 200.0) -> dict:
+    from libre_quant.ledger import drawdown, xirr_or_none
+
     cashflows = [(date.fromisoformat(j["day"]), planned)
                  for j in arm["journal"]]
-    irr = xirr(cashflows, arm["value"], days[-1]) if len(cashflows) >= 20 else None
-    if irr is not None and irr != irr:  # NaN 兜底，不进 JSON
-        irr = None
-    peak, dd = float("-inf"), 0.0
-    for v in arm["curve"]:
-        peak = max(peak, v)
-        dd = max(dd, 1 - v / peak if peak > 0 else 0.0)
+    irr = xirr_or_none(cashflows, arm["value"], days[-1])
     return {
         "invested": arm["invested"], "value": arm["value"], "fees": arm["fees"],
         "cash": arm["cash"], "buys": arm["buys"], "pauses": arm["pauses"],
-        "xirr": irr, "max_dd": dd, "avg_buy_premium": arm["avg_buy_premium"],
+        "xirr": irr, "max_dd": drawdown(arm["curve"]),
+        "avg_buy_premium": arm["avg_buy_premium"],
     }

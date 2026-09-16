@@ -722,11 +722,16 @@ def create_app(*, with_scheduler: bool = False) -> FastAPI:
                         cash=prev_cash,
                         flows=flows if kind == "paper" else None,
                         as_of=prev_day)
-                    # 剔除当日新增投入（储蓄是打钱，不是赚的钱）
+                    # 剔除当日新增投入（储蓄是打钱，不是赚的钱）：
+                    # 模拟盘=当日计划投入；实际盘=当日买入成交额
                     contrib = 0.0
                     if kind == "paper" and flows:
                         contrib = sum(a for d, a in flows
                                       if d == days[-1])
+                    elif kind == "real":
+                        contrib = sum(t.amount for t in trades
+                                      if t.day == days[-1]
+                                      and t.action == "buy")
                     v["prev_value"] = pv["value"]
                     v["day_contribution"] = contrib
                     v["day_pnl"] = v["value"] - contrib - pv["value"]
@@ -885,22 +890,21 @@ def create_app(*, with_scheduler: bool = False) -> FastAPI:
                 "sell_pct": float(plan[8]) if plan else 0.0,
             }
 
-            # ---- 你的真实持仓（从实际盘成交算）
+            # ---- 你的真实持仓（从实际盘成交算，走估值内核 ledger）
             hold = {"units": 0.0, "avg_cost": None, "invested": 0.0,
                     "trades": 0}
             if account_id is not None:
-                trades = store.account_trades(conn, account_id)
-                units = sum(float(t[3]) for t in trades if t[1] == "buy") \
-                    - sum(float(t[3]) for t in trades if t[1] == "sell")
-                invested = sum(float(t[4]) for t in trades if t[1] == "buy") \
-                    - sum(float(t[4]) for t in trades if t[1] == "sell")
-                hold = {"units": units, "invested": invested,
-                        "avg_cost": (invested / units) if units > 0 else None,
-                        "trades": len(trades)}
-                hold["value"] = units * raw[-1]
-                hold["profit"] = hold["value"] - invested
-                hold["profit_pct"] = ((hold["value"] / invested - 1)
-                                      if invested else None)
+                from libre_quant.accounts import Trade, value_trades
+                trades = [Trade(day=d, action=a, price=float(p),
+                                qty=float(q), amount=float(am),
+                                fee=float(f), note=nt or "")
+                          for d, a, p, q, am, f, nt
+                          in store.account_trades(conn, account_id)]
+                v = value_trades(trades, dict(zip(days, raw)), days[-1])
+                hold = {"units": v["units"], "invested": v["invested"],
+                        "avg_cost": v["avg_cost"], "trades": v["trades"],
+                        "value": v["holdings"], "profit": v["pnl"],
+                        "profit_pct": v["pnl_pct"], "fees": v["fees"]}
 
             pd = price_detail(days, raw, adj)
             action = today_action(

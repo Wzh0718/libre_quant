@@ -11,7 +11,6 @@ from __future__ import annotations
 
 from datetime import date
 
-from libre_quant.metrics import xirr
 from libre_quant.shadow import GATE_THRESH
 
 FILLS = ("close", "open", "mid")
@@ -127,6 +126,8 @@ def replay_variants(
 
 
 def _summary(days: list[date], arm: dict) -> dict:
+    from libre_quant.ledger import drawdown, xirr_or_none
+
     journal = arm["journal"]
     if not journal:
         return {}
@@ -134,19 +135,12 @@ def _summary(days: list[date], arm: dict) -> dict:
     cashflows = [(date.fromisoformat(j["day"]), j["planned"])
                  for j in journal if j["planned"] > 0]
     end_day = date.fromisoformat(journal[-1]["day"])
-    irr = xirr(cashflows, arm["value"], end_day) if len(cashflows) >= 20 else None
-    if irr is not None and irr != irr:  # NaN 兜底，不进 JSON
-        irr = None
-
-    peak, dd = float("-inf"), 0.0
-    for v in arm["curve"]:
-        peak = max(peak, v)
-        dd = max(dd, 1 - v / peak if peak > 0 else 0.0)
+    irr = xirr_or_none(cashflows, arm["value"], end_day)
 
     return {
         "invested": arm["invested"], "value": arm["value"],
         "fees": arm["fees"], "pending": arm["pending"],
         "buys": arm["buys"], "pauses": arm["pauses"],
-        "xirr": irr, "max_dd": dd,
+        "xirr": irr, "max_dd": drawdown(arm["curve"]),
         "avg_buy_premium": arm["avg_buy_premium"],
     }

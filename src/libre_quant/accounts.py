@@ -18,7 +18,6 @@ import math
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 
-from libre_quant.metrics import xirr
 from libre_quant.shadow import GATE_THRESH
 
 TRADING_DAYS = 244
@@ -150,53 +149,13 @@ def value_trades(trades: list[Trade], prices: dict[date, float],
 
     ``cash``：待投现金（模拟盘闸门暂停攒下的钱，属于账户资产）；
     ``flows``：计划投入现金流（模拟盘用；实际盘为 None → 用买入流水）。
+
+    实现在 ``libre_quant.ledger.valuation_summary``（docs/19 Phase 2 归一）；
+    本函数保持原签名作薄包装。
     """
-    if as_of is not None:                 # 历史估值：只算当日及之前的成交
-        trades = [t for t in trades if t.day <= as_of]
-        if flows is not None:
-            flows = [f for f in flows if f[0] <= as_of]
-    units = invested = fees = 0.0
-    for tr in trades:
-        if tr.action == "buy":
-            units += tr.qty
-            invested += tr.amount
-            fees += tr.fee
-        else:
-            units -= tr.qty
-            invested -= tr.amount
-            fees += tr.fee
-    px = prices.get(last_day)
-    if px is None:                      # 找最近有效价
-        for d in sorted(prices, reverse=True):
-            if d <= last_day:
-                px = prices[d]
-                last_day = d
-                break
-    holdings = units * (px or 0.0)
-    value = holdings + cash
-    if flows is not None:                 # 模拟盘：投入=计划现金流
-        contributed = sum(a for _, a in flows)
-        basis = contributed
-    else:                                 # 实际盘：投入=买入流水
-        contributed = invested
-        basis = invested
-    pnl = value - basis
-    irr = None
-    cf = flows if flows is not None else [
-        (tr.day, tr.amount) for tr in trades if tr.action == "buy"]
-    if cf and len(cf) >= 20:
-        irr = xirr(cf, value, last_day)
-        if irr != irr:  # NaN 兜底：异常现金流不进 JSON（非法字面量）
-            irr = None
-    return {
-        "units": units, "invested": basis, "fees": fees,
-        "holdings": holdings, "cash": cash,
-        "last_price": px, "last_day": str(last_day),
-        "value": value, "pnl": pnl,
-        "pnl_pct": (pnl / basis) if basis else None,
-        "avg_cost": (invested / units) if units else None,
-        "xirr": irr, "trades": len(trades),
-    }
+    from libre_quant.ledger import valuation_summary
+    return valuation_summary(trades, prices, last_day, cash=cash,
+                             flows=flows, as_of=as_of)
 
 
 def realized_vol(prices: list[float], window: int = 60) -> float | None:

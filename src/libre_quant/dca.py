@@ -15,7 +15,8 @@ from __future__ import annotations
 
 from datetime import date
 
-from libre_quant.metrics import fee, max_dd, xirr  # noqa: F401 (re-export)
+from libre_quant.ledger import drawdown
+from libre_quant.metrics import fee, xirr  # noqa: F401 (fee/xirr 再出口)
 
 
 def simulate(days, adj, plan, prem_ok, fee_rate: float, fee_min: float):
@@ -52,5 +53,5 @@ def simulate(days, adj, plan, prem_ok, fee_rate: float, fee_min: float):
     return {
         "invested": invested, "value": end_value, "xirr": xirr(
             cashflows, end_value, days[-1]),
-        "dd": max_dd(values), "buys": n_buys, "fees": fees,
+        "dd": drawdown(values), "buys": n_buys, "fees": fees,
     }

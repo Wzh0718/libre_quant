@@ -5,6 +5,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from fastapi.testclient import TestClient  # noqa: E402
@@ -110,3 +112,52 @@ def test_my_plan_patch_semantics(monkeypatch):
     # sell_pct > 1 必须 400（否则策略台卖出算出负持仓）
     r = client.put("/api/my-plan?sell_pct=1.5")
     assert r.status_code == 400
+
+
+def test_real_account_day_pnl_excludes_new_principal(monkeypatch):
+    """实际盘「今日盈亏」不得把当日新买入的本金算成收益。
+
+    旧实现 contrib 只在 paper 分支赋值，real 分支恒 0 →
+    day_pnl = value - 0 - prev_value 会把当日买入额全算成盈亏。
+    （docs/19 Phase 2 T2.2b；估值走 ledger 的 value_trades。）
+    """
+    from datetime import date, timedelta
+
+    import libre_quant.store as store
+
+    days = []
+    d = date(2024, 1, 1)
+    while len(days) < 40:
+        if d.weekday() < 5:
+            days.append(d)
+        d += timedelta(days=1)
+    raw = [10.0] * len(days)          # 价格恒定 → 市场盈亏严格为 0
+    trades = [
+        (days[0], "buy", 10.0, 100.0, 1000.0, 0.1, ""),
+        (days[-1], "buy", 10.0, 50.0, 500.0, 0.1, ""),   # 当日新投入
+    ]
+
+    class _StubConn:
+        def close(self):
+            pass
+
+    monkeypatch.setattr(store, "connect", lambda: _StubConn())
+    monkeypatch.setattr(store, "list_accounts",
+                        lambda conn: [(1, "实盘", "real", "159941",
+                                       "naive", {}, days[0])])
+    monkeypatch.setattr(store, "load_series",
+                        lambda conn, code: (days, raw, raw[:], "price"))
+    monkeypatch.setattr(store, "load_premiums", lambda conn, code: {})
+    monkeypatch.setattr(store, "account_trades",
+                        lambda conn, aid: trades if aid == 1 else [])
+
+    client = TestClient(create_app())
+    r = client.get("/api/accounts")
+    assert r.status_code == 200
+    item = r.json()["items"][0]
+    assert item["day_contribution"] == pytest.approx(500.0)
+    # 价格恒定：今日盈亏只应剩费用口径的微扰，不含 500 元本金
+    assert item["day_pnl"] == pytest.approx(0.0, abs=0.01)
+    # 持仓估值走 ledger（units/avg_cost/fees 齐全）
+    assert item["units"] == pytest.approx(150.0)
+    assert item["fees"] == pytest.approx(0.2)
