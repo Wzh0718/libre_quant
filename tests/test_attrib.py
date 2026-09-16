@@ -113,13 +113,14 @@ def test_attribute_series_windows_and_skips_zero_position():
     prices = [round(10 + 0.05 * ((i * 11) % 9) - 0.01 * i, 3)
               for i in range(40)]
     units = {d: (100.0 if i >= 5 else 0.0) for i, d in enumerate(days)}
-    fees = {days[10]: 0.2}
+    fees = {days[30]: 0.2}               # 落在最近 20 行窗口内
     rows = attribute_series(days, prices, units, fees,
                             overnight=lambda d: 0.01,
                             fx_ret=lambda d: -0.002, window=20)
-    # 前 5 日无持仓 → 不出归因行；window=20 截最近 20 行
+    # 前 5 日无持仓 → 不出归因行；window=20 取**最近** 20 行（不是最早的）
     assert len(rows) == 20
-    assert rows[0]["day"] == str(days[6])
+    assert rows[0]["day"] == str(days[40 - 20])
+    assert rows[-1]["day"] == str(days[-1])
     for r in rows:                       # 每行恒等式
         assert r["market"] == pytest.approx(
             (r["us_overnight"] or 0) + (r["fx"] or 0)
@@ -128,3 +129,15 @@ def test_attribute_series_windows_and_skips_zero_position():
             r["market"] + r["intraday"] - r["fees"], abs=1e-9)
     fee_row = next(r for r in rows if r["fees"])
     assert fee_row["fees"] == 0.2
+
+
+def test_attribute_series_returns_latest_window_for_old_account():
+    """回归（2026-09-16 修复）：老账户（持仓从很早开始）window 取的必须是
+    最近 N 天，不是最早的 N 天。"""
+    days = _weekdays(date(2020, 1, 1), 500)
+    prices = [10.0 + 0.01 * i for i in range(500)]
+    units = {d: 100.0 for d in days}          # 全程持仓
+    rows = attribute_series(days, prices, units, {}, window=10)
+    assert len(rows) == 10
+    assert rows[-1]["day"] == str(days[-1])   # 最后一行 = 最新交易日
+    assert rows[0]["day"] == str(days[-10])

@@ -113,16 +113,15 @@ def attribute_series(
     fees_by_day: dict[date, float] | None = None,
     *, overnight=None, fx_ret=None, window: int = 30,
 ) -> list[dict]:
-    """逐日归因（最近 ``window`` 个**有持仓前日**的交易日）。
+    """逐日归因，取**最近** ``window`` 个有敞口的交易日（有前日持仓或有费用）。
 
-    * ``units_by_day``：每日收盘份额（ledger as_of 折叠）；
+    * ``units_by_day``：每日收盘份额（ledger as_of 折叠）；未覆盖的日期
+      视为 0 敞口（调用方可只提供近段，更早的行自动被跳过）；
     * ``overnight`` / ``fx_ret``：``f(day) -> float | None`` 查找器。
     """
     fees_by_day = fees_by_day or {}
     out: list[dict] = []
     for t in range(1, len(days)):
-        if len(out) >= window:
-            break
         d, prev = days[t], days[t - 1]
         up = units_by_day.get(prev, 0.0)
         row = daily_attribution(
@@ -134,4 +133,4 @@ def attribute_series(
         )
         if up > 0 or row["fees"]:
             out.append(row)
-    return out
+    return out[-window:] if window else out
