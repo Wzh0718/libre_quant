@@ -1033,8 +1033,11 @@ def create_app(*, with_scheduler: bool = False) -> FastAPI:
     # ---------------------------------------------------------- 作战闭环（①②③④）
 
     def _resolve_battle_params(conn, code: str, strategy_id: int | None,
-                               inline: dict) -> dict:
-        """作战参数解析顺序：strategy_id → 内联参数 → user_plan（沿用策略台口径）。"""
+                               inline: dict) -> tuple[dict, str]:
+        """作战参数解析顺序：strategy_id → 内联参数 → user_plan → 该标的最近策略版本。
+
+        返回 (params, source)；source 用于前端标注参数出处。
+        """
         from fastapi import HTTPException
 
         from libre_quant import store as _s
@@ -1042,9 +1045,9 @@ def create_app(*, with_scheduler: bool = False) -> FastAPI:
             row = _s.strategy_get(conn, strategy_id)
             if not row:
                 raise HTTPException(404, f"策略版本 #{strategy_id} 不存在")
-            return dict(row[3])
+            return dict(row[3]), f"strategy:{strategy_id}"
         if any(v is not None for v in inline.values()):
-            return {k: v for k, v in inline.items() if v is not None}
+            return {k: v for k, v in inline.items() if v is not None}, "inline"
         plan = _s.get_user_plan(conn)
         if plan:
             return {
@@ -1054,10 +1057,13 @@ def create_app(*, with_scheduler: bool = False) -> FastAPI:
                 "dip_mult": float(plan[5]) or None,
                 "rise_gain": (float(plan[6]) if plan[6] < 1 else None),
                 "sell_pct": float(plan[8]) or None,
-            }
+            }, "user_plan"
+        latest = _s.strategy_list(conn, code)
+        if latest:
+            return dict(latest[0][3]), f"latest_strategy:{latest[0][0]}"
         raise HTTPException(
-            400, "还没有作战参数：填查询参数、传 strategy_id，"
-                 "或先在复盘页保存一套参数")
+            400, "还没有作战参数：先到复盘页填参数跑历史，"
+                 "满意后存成策略版本，作战台就能直接用")
 
     def _real_position(conn, account_id: int, days, raw):
         """实际盘当前持仓（估值内核口径）；无账户/无成交返回零仓。"""
@@ -1076,7 +1082,7 @@ def create_app(*, with_scheduler: bool = False) -> FastAPI:
                 "profit_pct": v["pnl_pct"]}
 
     def _run_battle(conn, code: str, params: dict, account_id: int | None,
-                    horizon: int) -> dict:
+                    horizon: int, params_source: str = "inline") -> dict:
         """作战方案 = weekly_plan（规则触发单）+ run_history（同参数历史表现）。"""
         from fastapi import HTTPException
 
@@ -1110,6 +1116,7 @@ def create_app(*, with_scheduler: bool = False) -> FastAPI:
                     "curve": h["curve"][::step],
                     "curve_days": [str(d) for d in days][::step]}
         return {"code": code, "name": _name_of(code),
+                "params_source": params_source,
                 "situation": situation(days, raw, adj, prem or None),
                 "history": hist, **plan}
 
@@ -1125,12 +1132,13 @@ def create_app(*, with_scheduler: bool = False) -> FastAPI:
 
         conn = store.connect()
         try:
-            params = _resolve_battle_params(conn, code, strategy_id, {
+            params, source = _resolve_battle_params(conn, code, strategy_id, {
                 "daily": daily, "premium_max": premium_max,
                 "dip_drop": dip_drop, "dip_mult": dip_mult,
                 "rise_gain": rise_gain, "sell_pct": sell_pct,
                 "vol_target": vol_target})
-            return _run_battle(conn, code, params, account_id, horizon)
+            return _run_battle(conn, code, params, account_id, horizon,
+                               params_source=source)
         finally:
             conn.close()
 
@@ -1150,10 +1158,11 @@ def create_app(*, with_scheduler: bool = False) -> FastAPI:
             raise HTTPException(400, "需要 code 和 account_id")
         conn = store.connect()
         try:
-            params = _resolve_battle_params(
+            params, source = _resolve_battle_params(
                 conn, code, payload.get("strategy_id"),
                 dict(payload.get("params") or {}))
-            out = _run_battle(conn, code, params, int(account_id), horizon)
+            out = _run_battle(conn, code, params, int(account_id), horizon,
+                              params_source=source)
             pid = store.battle_plan_save(
                 conn, int(account_id), code,
                 _date.fromisoformat(out["as_of"]), horizon,

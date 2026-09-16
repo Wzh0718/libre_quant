@@ -771,6 +771,7 @@ export interface BattleHistory {
 export interface BattleData {
   code: string;
   name: string;
+  params_source: string;
   as_of: string;
   horizon: number;
   params: BattleParams;

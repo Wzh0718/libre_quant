@@ -32,6 +32,7 @@ def fake_store(monkeypatch):
                         lambda conn, code: (DAYS, CLOSES, list(CLOSES), "price"))
     monkeypatch.setattr(store, "load_premiums", lambda conn, code: {})
     monkeypatch.setattr(store, "get_user_plan", lambda conn: None)
+    monkeypatch.setattr(store, "strategy_list", lambda conn, code=None: [])
     monkeypatch.setattr(store, "account_trades", lambda conn, aid: [])
     monkeypatch.setattr(store, "get_account", lambda conn, aid:
                         (aid, "实盘", "real", "515880", "gate", {}, DAYS[0]))

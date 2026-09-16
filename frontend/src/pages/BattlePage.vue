@@ -17,6 +17,7 @@ const accountId = ref<number | null>(null);
 const strategyId = ref<number | null>(null);
 const loading = ref(true);
 const err = ref<string | null>(null);
+const needParams = ref(false);
 const msg = ref<string | null>(null);
 const saving = ref(false);
 
@@ -42,7 +43,9 @@ async function load() {
       accountId: accountId.value, strategyId: strategyId.value });
   } catch (e) {
     data.value = null;
-    err.value = e instanceof Error ? e.message : String(e);
+    const m = e instanceof Error ? e.message : String(e);
+    needParams.value = m.includes("还没有作战参数");
+    err.value = needParams.value ? null : m;
   } finally {
     loading.value = false;
   }
@@ -70,9 +73,18 @@ const histSeries = computed(() => data.value?.history
        color: CHART_COLORS.green }]
   : []);
 
-const strategyName = computed(() =>
-  strategies.value.find(s => s.id === strategyId.value)?.name
-  ?? (strategyId.value == null ? "当前默认参数" : `#${strategyId.value}`));
+const strategyName = computed(() => {
+  if (strategyId.value != null)
+    return strategies.value.find(s => s.id === strategyId.value)?.name
+      ?? `#${strategyId.value}`;
+  const src = data.value?.params_source ?? "";
+  if (src.startsWith("latest_strategy:")) {
+    const id = Number(src.split(":")[1]);
+    return `最近策略版本 #${id}（${strategies.value.find(s => s.id === id)?.name ?? ""}）`;
+  }
+  if (src === "user_plan") return "我的计划参数";
+  return "当前参数";
+});
 
 onMounted(load);
 watch(selectedCode, () => { strategyId.value = null; load(); });
@@ -81,13 +93,16 @@ watch([accountId, strategyId], load);
 
 <template>
   <div v-if="loading" class="state-block" role="status" aria-busy="true">计算中…</div>
-  <div v-else-if="err" class="state-block" role="alert">
-    <p>出错了：{{ err }}</p>
-    <p class="muted" style="font-size:13px">
-      还没设参数？先去<router-link to="/review">复盘页</router-link>填参数跑历史，
-      或在<router-link to="/strategies">策略库</router-link>选一个版本。
-      <button class="badge badge-hold" style="cursor:pointer" @click="load">重试</button>
+  <div v-else-if="needParams" class="card" style="border-color:var(--amber)">
+    <strong>还没有作战参数</strong>
+    <p class="muted" style="margin:8px 0">
+      作战方案用的是<b>你的</b>参数，系统不替你发明数字。第一次用请先去
+      <router-link to="/review">复盘页</router-link>：填参数 → 跑历史 → 存成策略版本，
+      回到这里就能直接生成未来一周的买卖方案。
     </p>
+  </div>
+  <div v-else-if="err" class="state-block" role="alert">
+    出错了：{{ err }} <button class="badge badge-hold" style="cursor:pointer" @click="load">重试</button>
   </div>
   <template v-else-if="data">
     <!-- 抬头：标的 / 数据截至 / 用哪个盘算持仓 / 用哪版策略 -->
@@ -106,7 +121,7 @@ watch([accountId, strategyId], load);
       <label class="muted">策略版本
         <select v-model.number="strategyId" style="background:var(--surface);color:var(--text);
                 border:1px solid var(--border);border-radius:6px;padding:4px 8px;margin-left:6px">
-          <option :value="null">默认参数（我的计划）</option>
+          <option :value="null">自动（我的计划 / 最近版本）</option>
           <option v-for="s in strategies" :key="s.id" :value="s.id">
             #{{ s.id }} {{ s.name }}</option>
         </select>
