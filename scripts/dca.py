@@ -75,15 +75,16 @@ def main(argv=None) -> int:
     weekly = args.daily * 5
     monthly = args.daily * 20
 
+    # D2 权威口径（gap≥5 版）：libre_quant.timing.first_of_week 全站唯一
+    from libre_quant.timing import first_of_month, first_of_week
+    week_starts = first_of_week(days)
+    month_starts = first_of_month(days)
+
     def is_first_of_week(d: date) -> bool:
-        # docs/19 D2 拍板：gap≥5 版是全站权威口径（libre_quant.timing.
-        # first_of_week）；本闭包 Phase 3 T3.0 删除，先保持现状对齐
-        i = days.index(d)
-        return i == 0 or (d - days[i - 1]).days >= 5 or d.weekday() < days[i - 1].weekday()
+        return d in week_starts
 
     def is_first_of_month(d: date) -> bool:
-        i = days.index(d)
-        return i == 0 or d.month != days[i - 1].month
+        return d in month_starts
 
     variants = [
         ("每日定投", lambda d: args.daily, lambda d: True),

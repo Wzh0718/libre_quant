@@ -85,27 +85,35 @@ def test_run_positions_monthly_ma_golden():
     keys, mcloses = month_series(days, prices)
     pos = daily_positions(days, keys, monthly_sig(keys, mcloses, 3))
     assert len(keys) == 8 and sum(monthly_sig(keys, mcloses, 3)) == 6.0
-    m, trades = run_positions(days, prices, pos)
+    m, eq = run_positions(days, prices, pos)
     assert (round(m.total, 6), round(m.cagr, 6), round(m.max_dd, 6),
             round(m.sharpe, 6), round(m.calmar, 6), round(m.exposure, 6),
-            trades) == (0.318388, 0.510077, 0.164265, 0.968314,
-                        3.105207, 0.621302, 1)
+            m.trades) == (0.318388, 0.510077, 0.164265, 0.968314,
+                          3.105207, 0.621302, 1)
+    assert round(eq[-1], 6) == round(1 + m.total, 6)
 
 
-def test_positions_daily_is_behaviorally_identical_copy():
-    """review._positions_daily 与 monthly_ma.run_positions 是同一循环的
-    两份拷贝：同 closes+pos 下逐字段相等（Phase 3 T3.1 合并为单实现）。"""
-    from libre_quant.review import _positions_daily
+def test_run_positions_is_the_single_position_loop():
+    """run（signal 版）与 run_positions（预计算仓位版）必须同一循环：
+    同一仓位序列下逐字段相等（docs/19 T3.1 引擎统一的锚点）。"""
+    from libre_quant.backtest import positions_of
 
     days, prices = long_series()
     keys, mcloses = month_series(days, prices)
     pos = daily_positions(days, keys, monthly_sig(keys, mcloses, 3))
-    m_ref, trades_ref = run_positions(days, prices, pos)
-    daily = _positions_daily(prices, pos)
-    expo = sum(1 for p in pos[1:] if p > 1e-9) / max(1, len(pos) - 1)
-    m_ind = bt.metrics(daily, expo, trades_ref)
-    for f in ("total", "cagr", "max_dd", "sharpe", "calmar", "exposure"):
-        assert round(getattr(m_ind, f), 9) == round(getattr(m_ref, f), 9)
+
+    def sig(closes, i):           # 把月线仓位表达成 signal（无前视）
+        return pos[i + 1] if i + 1 < len(pos) else 0.0
+
+    m_sig, eq_sig = bt.run(prices, sig)
+    m_pos, eq_pos = run_positions(days, prices, pos)
+    for f in ("total", "cagr", "max_dd", "sharpe", "calmar", "exposure",
+              "trades"):
+        assert round(getattr(m_sig, f), 9) == round(getattr(m_pos, f), 9), f
+    assert eq_sig == pytest.approx(eq_pos, abs=1e-12)
+    # positions_of 就是 run 的仓位生成器
+    pos2, _ = positions_of(prices, sig)
+    assert pos2 == pytest.approx(pos)
 
 
 def test_attribution_simulate_matches_backtest_total():
@@ -225,19 +233,16 @@ def test_ladder_paper_uses_grid_engine():
     assert amounts != {200.0}   # 不该是朴素日投的等额流水
 
 
-def test_weekly_calendar_definitions_diverge_on_long_holiday():
-    """D2 现状：两套"一周之首"。国庆长假（9/30 周二 → 10/11 周五）后：
-    dca 版（gap≥5 算新周）认定 10/11 是新周，review 版（isoweekday 回绕）
-    不认定 → 每周定投在同一段历史上 CLI 与看板结果不同。
-    T3.0 统一为 gap≥5 版后本测试删除。"""
+def test_weekly_calendar_canonical_is_gap5():
+    """D2 已统一（docs/19 T3.0）：全站唯一口径 ``timing.first_of_week``。
+    国庆长假（9/30 周二 → 10/11 周五）后首个交易日视为新周（补投，
+    保每周投入等额可比）。旧 review._first_of_week（严格自然周）已删。"""
+    from libre_quant.timing import first_of_month, first_of_week
+
     days = [date(2024, 9, 30), date(2024, 10, 11), date(2024, 10, 14)]
-
-    def dca_rule(days):   # scripts/dca.py main() 内闭包的复刻
-        return {d for i, d in enumerate(days)
-                if i == 0 or (d - days[i - 1]).days >= 5
-                or d.weekday() < days[i - 1].weekday()}
-
-    from libre_quant.review import _first_of_week
-    assert dca_rule(days) == {date(2024, 9, 30), date(2024, 10, 11),
-                              date(2024, 10, 14)}
-    assert _first_of_week(days) == {date(2024, 9, 30), date(2024, 10, 14)}
+    assert first_of_week(days) == {date(2024, 9, 30), date(2024, 10, 11),
+                                   date(2024, 10, 14)}
+    # 普通周末（周五 → 周一）不算长假，但也因 isoweekday 回绕算新周
+    normal = [date(2024, 9, 26), date(2024, 9, 27), date(2024, 9, 30)]
+    assert first_of_week(normal) == {date(2024, 9, 26), date(2024, 9, 30)}
+    assert first_of_month(days) == {date(2024, 9, 30), date(2024, 10, 11)}

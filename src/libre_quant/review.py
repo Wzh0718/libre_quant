@@ -25,11 +25,11 @@ def strategy_review(days: list[date], closes: list[float]) -> dict:
     净值曲线第 t 点对应 days[t+1]。
     """
     from libre_quant.backtest import (
-        equity_curve, run, sig_buy_hold, sig_ma_filter_trend, sig_vol_target,
+        run, run_positions, sig_buy_hold, sig_ma_filter_trend, sig_vol_target,
     )
     from libre_quant.dca import simulate
     from libre_quant.timing import (
-        daily_positions, month_series, monthly_sig, run_positions,
+        daily_positions, month_series, monthly_sig,
     )
 
     def pack(m, eq) -> dict:
@@ -49,8 +49,7 @@ def strategy_review(days: list[date], closes: list[float]) -> dict:
 
     keys, mcloses = month_series(days, closes)
     pos = daily_positions(days, keys, monthly_sig(keys, mcloses, 5))
-    m5, _ = run_positions(days, closes, pos)
-    eq5 = equity_curve(_positions_daily(closes, pos))
+    m5, eq5 = run_positions(days, closes, pos)
     out["MA5月线"] = pack(m5, eq5)
 
     return {"days": _downsample_dates(days[1:]),  # 与净值曲线对齐
@@ -67,17 +66,6 @@ def _yearly_from_eq(days: list[date], eq: list[float]) -> dict:
         out[y] = eq[bounds[y]] / prev - 1
         prev = eq[bounds[y]]
     return out
-
-
-def _positions_daily(closes: list[float], pos: list[float],
-                     cost: float = 0.0005) -> list[float]:
-    daily, prev = [], 0.0
-    for t in range(1, len(closes)):
-        r = closes[t] / closes[t - 1] - 1
-        turn = abs(pos[t] - prev)
-        daily.append(pos[t] * r - turn * cost)
-        prev = pos[t]
-    return daily
 
 
 def _downsample(series: list[float], n: int = 600) -> list[float]:
@@ -100,10 +88,11 @@ def dca_review(days: list[date], adj: list[float],
                prem: dict[date, float], above_ma5: dict[date, float],
                rate: float, min_fee: float, daily_amt: float = 200.0) -> list[dict]:
     from libre_quant.dca import simulate
+    from libre_quant.timing import first_of_month, first_of_week
 
     weekly, monthly = daily_amt * 5, daily_amt * 20
-    first_week = _first_of_week(days)
-    first_month = _first_of_month(days)
+    first_week = first_of_week(days)     # D2 权威口径（gap≥5 版）
+    first_month = first_of_month(days)
 
     variants = [
         ("每日定投", lambda d: daily_amt, lambda d: True),
@@ -123,16 +112,6 @@ def dca_review(days: list[date], adj: list[float],
             "fees": r["fees"], "multiple": r["value"] / r["invested"],
         })
     return rows
-
-
-def _first_of_week(days: list[date]) -> set[date]:
-    return {d for i, d in enumerate(days)
-            if i == 0 or d.isoweekday() < days[i - 1].isoweekday()}
-
-
-def _first_of_month(days: list[date]) -> set[date]:
-    return {d for i, d in enumerate(days)
-            if i == 0 or d.month != days[i - 1].month}
 
 
 # ---------------------------------------------------------------- 溢价分析

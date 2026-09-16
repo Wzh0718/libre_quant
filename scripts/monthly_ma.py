@@ -98,12 +98,12 @@ def main(argv=None) -> int:
                          daily_positions(days, keys, sig_b), blocked))
 
         for name, pos, blocked in rows:
-            m, trades = run_positions(days, closes, pos)
+            m, _eq = run_positions(days, closes, pos)
             nt = net_timing(days, closes, pos)
             suffix = f"（拦{blocked}次）" if blocked else ""
             print(f"{code:<8}{name + suffix:<18}{m.total:>8.1%}{m.cagr:>8.1%}"
                   f"{m.max_dd:>8.1%}{m.sharpe:>7.2f}{m.exposure:>7.1%}"
-                  f"{trades:>6}{nt:>+9.2f}")
+                  f"{m.trades:>6}{nt:>+9.2f}")
         print("-" * 96)
 
         # 当前姿态：本月持仓 = 上个月末信号

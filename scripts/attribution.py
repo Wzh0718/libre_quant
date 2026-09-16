@@ -85,23 +85,21 @@ class Attribution:
 
 
 def simulate(bars: list[Bar], signal) -> Attribution:
+    from libre_quant.backtest import positions_of
+
     days = [b.day for b in bars]
     closes = [b.close for b in bars]
-    n = len(closes)
 
     att = Attribution(name=signal.__name__ if callable(signal) else "strategy",
                       days=days, closes=closes)
-    pos = [0.0] * n
+    # 仓位序列复用引擎统一实现（docs/19 T3.1）；对数分解是本模块的增量
+    pos, _ = positions_of(closes, signal)
 
-    for t in range(1, n):
-        raw = signal(closes, t - 1)
-        new = pos[t - 1] if raw < 0 else raw
-        pos[t] = new
-
+    for t in range(1, len(closes)):
         r = closes[t] / closes[t - 1] - 1
-        turnover = abs(new - pos[t - 1])
+        turnover = abs(pos[t] - pos[t - 1])
         cost_part = -turnover * COST_PER_SIDE
-        market_part = new * r
+        market_part = pos[t] * r
 
         att.l_bh += math.log1p(r)
         att.l_strat += math.log1p(market_part + cost_part)

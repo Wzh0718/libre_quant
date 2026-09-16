@@ -131,28 +131,76 @@ def sig_ma_filter_trend(ma_n: int):
 
 # ---------------------------------------------------------------- 回测引擎
 
-def run(closes: list[float], signal) -> tuple[Metrics, list[float]]:
-    """仓位从 T+1 生效，杜绝前视偏差。"""
-    pos: list[float] = [0.0] * len(closes)
-    daily: list[float] = []
-    trades = 0
+def positions_of(closes, signal, adjust=None) -> tuple[list[float], int]:
+    """signal → 逐日仓位序列（仓位从 T+1 生效，杜绝前视）。
 
+    * ``signal(closes, i)`` 返回目标仓位；负数 = 维持原仓位；
+    * ``adjust(new, prev, t)`` 可选钩子 → ``(new', blocked_hit)``，
+      用于"禁买只拦加仓"这类依赖前一仓位的规则（qdii_pricing）。
+    返回 (pos, blocked计数)。
+    """
+    pos: list[float] = [0.0] * len(closes)
+    blocked = 0
     for t in range(1, len(closes)):
         raw = signal(closes, t - 1)          # 用 T-1 及之前的数据
         if raw < 0:                           # -1 表示"维持原仓位"
             new = pos[t - 1]
         else:
             new = raw
+        if adjust is not None:
+            new, hit = adjust(new, pos[t - 1], t)
+            if hit:
+                blocked += 1
         pos[t] = new
+    return pos, blocked
 
+
+def daily_returns(closes: list[float], pos: list[float],
+                  cost: float = COST_PER_SIDE) -> tuple[list[float], int]:
+    """仓位 → 逐日收益（含换手成本）。返回 (daily, trades)。"""
+    daily: list[float] = []
+    trades = 0
+    for t in range(1, len(closes)):
         ret = closes[t] / closes[t - 1] - 1
-        turnover = abs(new - pos[t - 1])
+        turnover = abs(pos[t] - pos[t - 1])
         if turnover > 1e-9:
             trades += 1
-        daily.append(new * ret - turnover * COST_PER_SIDE)
+        daily.append(pos[t] * ret - turnover * cost)
+    return daily, trades
 
-    exposure = sum(1 for p in pos if p > 1e-9) / max(1, len(pos) - 1)
-    return metrics(daily, exposure, trades), equity_curve(daily)
+
+def _exposure(pos: list[float]) -> float:
+    return sum(1 for p in pos if p > 1e-9) / max(1, len(pos) - 1)
+
+
+def run(closes: list[float], signal) -> tuple[Metrics, list[float]]:
+    """signal 回测：指标 + 净值曲线。"""
+    pos, _ = positions_of(closes, signal)
+    daily, trades = daily_returns(closes, pos)
+    return metrics(daily, _exposure(pos), trades), equity_curve(daily)
+
+
+def run_positions(days: list[float] | list, closes: list[float],
+                  pos: list[float]) -> tuple[Metrics, list[float]]:
+    """预计算仓位回测（月线信号等）：与 ``run`` 同一循环、同一口径。
+
+    ``days`` 仅为调用方可读性保留（引擎不使用）。
+    返回 (Metrics, 净值曲线)。
+    """
+    daily, trades = daily_returns(closes, pos)
+    return metrics(daily, _exposure(pos), trades), equity_curve(daily)
+
+
+def yearly_from_daily(daily: list[float], days: list[date]) -> dict[int, float]:
+    """逐日收益按自然年聚合（分年度收益，暴露「只在某一年赚钱」）。"""
+    out: dict[int, float] = {}
+    for t in range(1, len(days)):
+        y = days[t].year
+        if y not in out:
+            out[y] = 1.0
+        if t - 1 < len(daily):
+            out[y] *= 1 + daily[t - 1]
+    return {y: v - 1 for y, v in out.items()}
 
 
 def yearly(closes: list[float], days: list[date]) -> dict[int, float]:

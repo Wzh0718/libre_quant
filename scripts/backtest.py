@@ -29,9 +29,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from libre_quant.backtest import (  # noqa: E402,F401 —— 兼容再出口
-    COST_PER_SIDE, Metrics, equity_curve, metrics, run, sig_buy_hold,
-    sig_donchian, sig_ma_cross, sig_ma_filter_trend, sig_trend_vol,
-    sig_vol_target, yearly,
+    COST_PER_SIDE, Metrics, daily_returns, equity_curve, metrics,
+    positions_of, run, sig_buy_hold, sig_donchian, sig_ma_cross,
+    sig_ma_filter_trend, sig_trend_vol, sig_vol_target, yearly,
+    yearly_from_daily,
 )
 from libre_quant.data.quotes import fetch_daily_all as fetch_all  # noqa: E402
 from libre_quant.universe import UNIVERSE, onshore_etfs  # noqa: E402
@@ -116,29 +117,13 @@ def main(argv=None) -> int:
     by = yearly(closes, days)
     print(f"{'买入持有(基准)':<22}" + "".join(f"{by[y]:>8.1%}" for y in sorted(by)))
 
-    # 各策略分年度：需要按年重跑
+    # 各策略分年度：按年聚合逐日收益（引擎统一后复用同一循环，
+    # docs/19 T3.1；顺带修旧内联版 i=0 时 daily[-1] 负下标回绕的 bug）
     years = sorted(by)
     for name, sig in STRATS[1:]:
-        pos_years: dict[int, float] = {}
-        # 重算该策略的逐日收益并按年聚合
-        pos = [0.0] * len(closes)
-        daily = []
-        for t in range(1, len(closes)):
-            raw = sig(closes, t - 1)
-            new = pos[t - 1] if raw < 0 else raw
-            pos[t] = new
-            daily.append(new * (closes[t] / closes[t - 1] - 1)
-                         - abs(new - pos[t - 1]) * COST_PER_SIDE)
-        for y in years:
-            idx = [i for i, d in enumerate(days) if d.year == y]
-            if not idx:
-                continue
-            lo, hi = min(idx), max(idx)
-            eq = 1.0
-            for i in range(lo, hi + 1):
-                if i - 1 < len(daily):
-                    eq *= 1 + daily[i - 1]
-            pos_years[y] = eq - 1
+        pos, _ = positions_of(closes, sig)
+        daily, _tr = daily_returns(closes, pos)
+        pos_years = yearly_from_daily(daily, days)
         print(f"{name:<22}" + "".join(f"{pos_years.get(y, float('nan')):>8.1%}" for y in years))
 
     print("\n" + "=" * 92)

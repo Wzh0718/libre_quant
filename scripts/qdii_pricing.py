@@ -93,26 +93,22 @@ def run_blocked(closes, days, sig, prem: dict[date, float],
                 thresh: float = PREM_THRESH):
     """backtest.run + 禁买规则：信号日 T-1 的溢价 > thresh 时不允许加仓。
 
+    与 ``libre_quant.backtest`` 共享同一仓位/收益循环（docs/19 T3.1），
+    禁买作为 ``positions_of`` 的 adjust 钩子注入（只禁止加仓，不强制平仓）。
     返回 (Metrics, blocked_entries)。
     """
-    pos = [0.0] * len(closes)
-    daily: list[float] = []
-    trades = 0
-    blocked = 0
-    for t in range(1, len(closes)):
-        raw = sig(closes, t - 1)
-        new = pos[t - 1] if raw < 0 else raw
-        if new > pos[t - 1] + 1e-9 and prem.get(days[t - 1], 0.0) > thresh:
-            blocked += 1
-            new = pos[t - 1]  # 只禁止加仓，不强制平仓
-        pos[t] = new
-        ret = closes[t] / closes[t - 1] - 1
-        turnover = abs(new - pos[t - 1])
-        if turnover > 1e-9:
-            trades += 1
-        daily.append(new * ret - turnover * COST_PER_SIDE)
-    exposure = sum(1 for p in pos if p > 1e-9) / max(1, len(pos) - 1)
-    return metrics(daily, exposure, trades), blocked
+    from libre_quant.backtest import (
+        _exposure, daily_returns, metrics, positions_of,
+    )
+
+    def _gate(new, prev, t):
+        if new > prev + 1e-9 and prem.get(days[t - 1], 0.0) > thresh:
+            return prev, True
+        return new, False
+
+    pos, blocked = positions_of(closes, sig, adjust=_gate)
+    daily, trades = daily_returns(closes, pos)
+    return metrics(daily, _exposure(pos), trades), blocked
 
 
 # ---------------------------------------------------------------- 主程序

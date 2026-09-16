@@ -19,8 +19,7 @@ from __future__ import annotations
 import math
 from datetime import date
 
-from libre_quant.backtest import COST_PER_SIDE, metrics
-
+from libre_quant.backtest import run_positions  # noqa: F401 —— 引擎统一后兼容再出口
 
 # ---------------------------------------------------------------- 月度信号
 
@@ -60,22 +59,6 @@ def daily_positions(days, keys, sig) -> list[float]:
     return [sig[idx[(d.year, d.month)] - 1]
             if idx[(d.year, d.month)] - 1 >= 0 else 0.0
             for d in days]
-
-
-def run_positions(days, closes, pos) -> tuple:
-    """逐日收益聚合（与 backtest.run 同一口径）。返回 (Metrics, trades)。"""
-    daily = []
-    trades = 0
-    prev = 0.0
-    for t in range(1, len(closes)):
-        r = closes[t] / closes[t - 1] - 1
-        turn = abs(pos[t] - prev)
-        if turn > 1e-9:
-            trades += 1
-        daily.append(pos[t] * r - turn * COST_PER_SIDE)
-        prev = pos[t]
-    exposure = sum(1 for p in pos[1:] if p > 1e-9) / max(1, len(pos) - 1)
-    return metrics(daily, exposure, trades), trades
 
 
 def net_timing(days, closes, pos) -> float:
