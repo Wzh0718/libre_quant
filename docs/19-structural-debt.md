@@ -75,7 +75,11 @@ src/libre_quant/
 
 ## 四、任务分解
 
-### Phase 0 · 基线与守卫（先于一切改动）
+> **进度（2026-09-16）**：Phase 0 ✅（690d6ba）· Phase 1 ✅（c879712）· Phase 2 ✅（34534d6）·
+> Phase 3 进行中：T3.0/T3.1 ✅（3b7ec8b），T3.2–T3.5 待做 · Phase 4 待做。
+> 测试基线：136 passed + 2 xfailed（workbench 蒸发、ladder 退化——T3.3/T3.4 的翻转信号）。
+
+### Phase 0 · 基线与守卫（先于一切改动）✅
 
 - **T0.1 引擎行为基线测试**：5 份仓位引擎 + 5 份定投引擎各跑固定合成序列，把**当前**输出固化为 golden（已知漂移逐条注释）。AC：`tests/test_engine_baseline.py` 全绿，故意改任一引擎必红。规模 M。
 - **T0.2 账目守恒测试族**：每个定投引擎断言不变量——`invested == Σ计划投入`、`value == units×px + cash`、`units ≥ 0`、`Σjournal金额 == invested`。workbench 现状会 fail → 以 `xfail(strict)` 标记，Phase 3 翻转。AC：守恒测试就位。规模 M。
@@ -103,8 +107,13 @@ src/libre_quant/
 
 ### Phase 3 · S3 引擎统一（风险最高，小步走）
 
-- **T3.0 口径拍板落地**：D1/D2/D3 决定写回 §三；删掉输的那个周日历实现。S。
-- **T3.1 仓位引擎**：`libre_quant/backtest.py` 单实现（signal 与预计算 positions 两入口共享循环；分年聚合成为 API，删 backtest.main 内联第三遍）；monthly_ma/review/multi_asset_review/qdii_pricing.run_blocked 改调库；attribution.simulate 复用循环+保留 legs 分析。M-L（拆两次提交：引擎+parity 测试 / 迁移消费方）。
+- **T3.0 口径拍板落地** ✅（3b7ec8b）：D2 落地——`review._first_of_week` 与
+  scripts/dca 旧闭包删除，全站 `timing.first_of_week`（gap≥5 权威口径）。
+- **T3.1 仓位引擎** ✅（3b7ec8b）：`backtest.positions_of / daily_returns /
+  run_positions / yearly_from_daily` 单实现；review._positions_daily 删除；
+  qdii_pricing.run_blocked（adjust 钩子）/ attribution.simulate（复用仓位生成）/
+  multi_asset_review / backtest.main 分年度内联全部改调库；
+  顺带修 backtest.main 分年度 i=0 负下标回绕 bug。
 - **T3.2 定投引擎**：`libre_quant/dca.py` 统一 simulate（plan_amount/allow/fill/cash_policy 回调，fill 吸收 replay.fill_price）；dca.simulate、replay._run_arm、policy.run_policy 逐一重表达为配置 + parity 测试。L。
 - **T3.3 workbench 接入 + 修 bug**：run_history 改走引擎（计佣金、闸门资金进 cash）；T0.2 的 xfail 翻转为真断言。M。
 - **T3.4 ladder 修复**（按 D3）：derive_paper_trades 对 ladder 走 simulate_ladder（同引擎回调表达）；fraction_for 补分支或显式拒绝。M。
