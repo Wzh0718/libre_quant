@@ -161,15 +161,16 @@ def test_workbench_value_identity():
         h["units"] * prices[-1] + h["cash"], abs=1e-6)
 
 
-@pytest.mark.xfail(strict=True, reason="docs/19 T3.3：闸门日资金蒸发+零佣金，修复后 XPASS")
 def test_workbench_money_conservation():
-    """现状违反：6 个闸门日每天 200 元既不算 invested 也不进 cash。"""
+    """T3.3 修复后：闸门日资金进 cash（invested == Σ存入），佣金入账。"""
     days, prices, prem = short_series()
     h = wb.run_history(days, prices, daily=200.0, premium_max=0.05,
                        prem=prem)
     assert h["invested"] == 200.0 * len(days) == 8000.0
-    # 修复后佣金也应被计入：fees == Σ max(amount×rate, min)
-    assert h.get("fees", 0.0) > 0
+    assert h["fees"] > 0
+    # 与 dca 家族同口径：同场景下四引擎数字完全一致（S3 归零的锚点）
+    assert h["invested"] == 8000.0
+    assert h["value"] == pytest.approx(5757.086742, abs=1e-6)
 
 
 # ---------------------------------------------------------------- value_trades
@@ -216,6 +217,26 @@ def test_paper_account_cash_identity():
     # 每笔成交：qty == (amount − fee) / price
     for t in trades:
         assert t.qty == pytest.approx((t.amount - t.fee) / t.price)
+
+
+def test_ladder_paper_account_cash_identity():
+    """D3 修复后 ladder 模拟盘的攒款恒等式（含卖出净额回笼）。"""
+    days, prices, _ = short_series()
+    trades = derive_paper_trades(
+        "ladder", {"daily": 200.0, "base_price": prices[0],
+                   "buy_levels": [(-0.05, 1.0), (-0.10, 2.0)],
+                   "sell_levels": [(0.10, 0.25)]},
+        days, prices, {}, start=days[0])
+    flows = planned_flows("ladder", {"daily": 200.0}, days, days[0])
+    assert any(t.action == "sell" for t in trades)
+    # 账户现金 = Σ存入 − Σ买入 + Σ卖出净额（与 api.py 同口径）
+    cash = max(0.0, sum(a for _, a in flows)
+               - sum(t.amount for t in trades if t.action == "buy")
+               + sum(t.amount - t.fee for t in trades if t.action == "sell"))
+    v = value_trades(trades, dict(zip(days, prices)), days[-1],
+                     cash=cash, flows=flows)
+    assert v["value"] == pytest.approx(v["holdings"] + v["cash"])
+    assert v["invested"] == sum(a for _, a in flows)
 
 
 # ---------------------------------------------------------------- 网格族

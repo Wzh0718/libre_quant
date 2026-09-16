@@ -91,12 +91,26 @@ def derive_paper_trades(
     prem: dict[date, float], *, start: date,
     fee_rate: float = DEFAULT_FEE_RATE, fee_min: float = DEFAULT_FEE_MIN,
 ) -> list[Trade]:
-    """按方案推演模拟盘成交流水（只含真实成交日，暂停日不入流水）。"""
+    """按方案推演模拟盘成交流水（只含真实成交日，暂停日不入流水）。
+
+    ladder（价格阶梯）走 ``simulate_ladder`` 网格引擎（docs/19 D3 修复：
+    旧版静默退化成朴素日投——PLANS 注册了网格方案却从没按网格跑过）。
+    """
     daily = float(params.get("daily", 200.0))
     gate = float(params.get("gate", GATE_THRESH))
     monthly_amt = daily * 20
     pending = 0.0
     trades: list[Trade] = []
+    if plan == "ladder":
+        idx0 = next((t for t, d in enumerate(days) if d >= start), 0)
+        r = simulate_ladder(
+            days, prices,
+            base_price=float(params.get("base_price") or prices[idx0]),
+            buy_levels=params.get("buy_levels", DEFAULT_BUY_LEVELS),
+            sell_levels=params.get("sell_levels", DEFAULT_SELL_LEVELS),
+            daily=daily, start=start,
+            fee_rate=fee_rate, fee_min=fee_min)
+        return r["trades"]
     for t, d in enumerate(days):
         if d < start:
             continue

@@ -5,6 +5,9 @@
 * 暂停日的钱进 pending，条件恢复当天连本带额补投；
 * 成交价可选 close/open/mid —— 对应你实际在场内什么时点下单
   （日线 OHLC 已能刻画日内区间，不依赖分钟线）。
+
+docs/19 T3.2 起，``_run_arm`` 是 ``libre_quant.dca.run_cashflow`` 统一
+引擎的配置表达（成交价 fill 与估值价 mark 分离：open/mid 成交仍按收盘估值）。
 """
 
 from __future__ import annotations
@@ -36,64 +39,68 @@ def fill_price(t: int, fill: str, adj: list[float], raw: list[float],
 
 def _run_arm(
     days: list[date], adj: list[float], raw: list[float],
-    prem: dict[date, float], *,
-    planned: float, thresh: float, rate: float, min_fee: float,
-    gate: bool, above_ma5: list[float] | None = None,
+    prem: dict[date, float], *, planned: float, thresh: float, rate: float,
+    min_fee: float, gate: bool, above_ma5: list[float] | None = None,
     fill: str = "close", opens: list[float] | None = None,
     highs: list[float] | None = None, lows: list[float] | None = None,
     per_day: bool = True,
 ) -> dict:
     """单臂重放。份额与价格均为前复权（经济）口径。"""
-    units = pending = invested = fees = 0.0
-    buys = pauses = 0
-    buy_prems: list[float] = []
-    journal: list[dict] = []
-    curve: list[float] = []
+    from libre_quant.dca import run_cashflow
 
-    for t, d in enumerate(days):
+    def is_plan_day(t, d):
+        return per_day or (t > 0 and d.month != days[t - 1].month)
+
+    def _allowed(t, d):
         p = prem.get(d)
-        allowed = True
         if gate and p is not None and p > thresh:
-            allowed = False
+            return False
         if above_ma5 is not None and above_ma5[t] <= 0:
-            allowed = False
+            return False
+        return True
 
-        amount = 0.0
-        if per_day or (t > 0 and d.month != days[t - 1].month):
-            amount = planned
-            invested += amount
-        action, bought = "持有", 0.0
-        if amount > 0:
-            if allowed:
-                buy_amt = amount + pending
-                f = max(buy_amt * rate, min_fee)
-                px = fill_price(t, fill, adj, raw, opens, highs, lows)
-                got = max(0.0, buy_amt - f) / px
-                units += got
-                fees += f
-                bought, pending = buy_amt, 0.0
-                buys += 1
-                action = "买入"
-                if p is not None:
-                    buy_prems.append(p)
-            else:
-                pending += amount
-                pauses += 1
-                action = "暂停"
+    r = run_cashflow(
+        days, adj,
+        deposit=lambda t, d: planned if is_plan_day(t, d) else 0.0,
+        spendable=lambda t, d, cash, sold=0.0:
+            1.0 if (is_plan_day(t, d) and _allowed(t, d)) else 0.0,
+        fee_rate=rate, fee_min=min_fee,
+        fill=lambda t: fill_price(t, fill, adj, raw, opens, highs, lows),
+        mark=lambda t: adj[t],
+        premium=prem,
+    )
 
-        value = units * adj[t] + pending
-        curve.append(round(value, 4))
+    # journal 映射回 replay 契约（前端逐日流水账字段不变）
+    journal = []
+    buy_prems: list[float] = []
+    for t, row in enumerate(r["journal"]):
+        d, p = row["day"], row["premium"]
+        if row["planned"] > 0 and row["bought"] > 0:
+            action = "买入"
+            if p is not None:
+                buy_prems.append(p)
+        elif row["planned"] > 0:
+            action = "暂停"
+        else:
+            action = "持有"
         journal.append({
-            "day": str(d), "premium": p, "gate": "buy" if allowed else "pause",
-            "action": action, "planned": amount, "bought": round(bought, 4),
-            "pending": round(pending, 2), "invested": round(invested, 2),
-            "value": round(value, 2),
+            "day": str(d), "premium": p,
+            "gate": "buy" if _allowed(t, d) else "pause",
+            "action": action, "planned": row["planned"],
+            "bought": round(row["bought"], 4),
+            "pending": round(row["cash"], 2),
+            "invested": round(row["invested"], 2),
+            "value": round(row["value"], 2),
         })
 
+    curve = [round(v, 4) for v in r["curve"]]
     return {
-        "journal": journal, "invested": invested, "value": curve[-1] if curve else 0.0,
-        "fees": fees, "pending": pending, "buys": buys, "pauses": pauses,
-        "avg_buy_premium": sum(buy_prems) / len(buy_prems) if buy_prems else None,
+        "journal": journal, "invested": r["invested"],
+        "value": curve[-1] if curve else 0.0,
+        "fees": r["fees"], "pending": r["cash"], "buys": r["buys"],
+        "pauses": r["pauses"],
+        "avg_buy_premium": (sum(buy_prems) / len(buy_prems)
+                            if buy_prems else None),
         "curve": curve,
     }
 

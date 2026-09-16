@@ -36,50 +36,59 @@ def run_policy(
     policy, planned: float = 200.0, rate: float, min_fee: float,
     gate: float | None = GATE_THRESH,
 ) -> dict:
-    """按政策函数逐日投放。policy(t, d, prem, cash, vol) -> fraction。"""
-    units = cash = invested = fees = 0.0
-    buys = pauses = 0
-    buy_prems: list[float] = []
-    journal: list[dict] = []
-    curve: list[float] = []
+    """按政策函数逐日投放。policy(t, d, prem, cash, vol) -> fraction。
 
-    for t, d in enumerate(days):
-        cash += planned
-        invested += planned
+    docs/19 T3.2 起为 ``dca.run_cashflow`` 统一引擎的配置表达：
+    每日存入 ``planned``，政策函数给出投放比例（0=暂停攒钱，
+    <1=部分投放，现金拖累被真实计入组合价值）。
+    """
+    from libre_quant.dca import run_cashflow
+
+    def _blocked(p):
+        return gate is not None and p is not None and p > gate
+
+    def spendable(t, d, cash, sold=0.0):
         p = prem.get(d)
+        if _blocked(p):
+            return 0.0
         vol = rolling_vol(adj, t)
+        return max(0.0, min(1.0, policy(t, d, p, cash, vol)))
 
-        blocked = gate is not None and p is not None and p > gate
-        frac = 0.0 if blocked else max(0.0, min(1.0, policy(t, d, p, cash, vol)))
+    r = run_cashflow(days, adj,
+                     deposit=lambda t, d: planned,
+                     spendable=spendable,
+                     fee_rate=rate, fee_min=min_fee, premium=prem)
 
-        bought = 0.0
-        if frac > 0 and cash > 0:
-            amount = cash * frac
-            f = max(amount * rate, min_fee)
-            units += max(0.0, amount - f) / adj[t]
-            fees += f
-            bought = amount
-            cash -= amount
-            buys += 1
+    journal = []
+    buy_prems: list[float] = []
+    for row in r["journal"]:
+        p = row["premium"]
+        blocked = _blocked(p)
+        if row["bought"] > 0:
+            action = "买入"
             if p is not None:
                 buy_prems.append(p)
         elif blocked:
-            pauses += 1
-
-        value = units * adj[t] + cash
-        curve.append(round(value, 4))
+            action = "暂停"
+        else:
+            action = "持有"
         journal.append({
-            "day": str(d), "premium": p,
+            "day": str(row["day"]), "premium": p,
             "gate": "pause" if blocked else "buy",
-            "action": "买入" if bought else ("暂停" if blocked else "持有"),
-            "bought": round(bought, 2), "cash": round(cash, 2),
-            "invested": round(invested, 2), "value": round(value, 2),
+            "action": action, "bought": round(row["bought"], 2),
+            "cash": round(row["cash"], 2),
+            "invested": round(row["invested"], 2),
+            "value": round(row["value"], 2),
         })
 
+    curve = [round(v, 4) for v in r["curve"]]
     return {
-        "journal": journal, "invested": invested, "value": curve[-1],
-        "fees": fees, "cash": cash, "buys": buys, "pauses": pauses,
-        "avg_buy_premium": sum(buy_prems) / len(buy_prems) if buy_prems else None,
+        "journal": journal, "invested": r["invested"],
+        "value": curve[-1] if curve else 0.0,
+        "fees": r["fees"], "cash": r["cash"], "buys": r["buys"],
+        "pauses": r["pauses"],
+        "avg_buy_premium": (sum(buy_prems) / len(buy_prems)
+                            if buy_prems else None),
         "curve": curve,
     }
 

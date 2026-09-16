@@ -166,18 +166,19 @@ def test_dca_family_golden():
     assert len(flows) == 40
 
 
-def test_workbench_run_history_current_behavior():
-    """⚠️ 钉的是**现状**（S3 已知漂移）：6 个闸门日每天 200 元凭空蒸发
-    （invested 6800 ≠ 8000）且零佣金（fees 无处可查）。T3.3 修复后更新
-    本 golden 并附 before/after 到 docs/19 附录。"""
+def test_workbench_run_history_unified_semantics():
+    """T3.3 修复后的口径（与 dca 家族完全一致）：
+    闸门日 6×200 元进 cash 恢复日补投（invested 8000 ≠ 旧 6800）、
+    佣金入账 3.4 元（旧 0）、value/units 与 dca.simulate 逐位相同。
+    旧值（蒸发口径）：invested 6800 / value 4975.846854 / units 563.516065。"""
     days, prices, prem = short_series()
     h = wb.run_history(days, prices, daily=200.0, premium_max=0.05,
                        prem=prem)
     assert (h["invested"], round(h["value"], 6), round(h["profit"], 6),
             round(h["max_dd"], 6), h["buys"], h["sells"], h["skips"],
-            round(h["units"], 6), h["cash"]) == \
-        (6800.0, 4975.846854, -1824.153146, 0.386726, 34, 0, 6,
-         563.516065, 0.0)
+            round(h["units"], 6), h["cash"], round(h["fees"], 6)) == \
+        (8000.0, 5757.086742, -2242.913258, 0.368747, 34, 0, 6,
+         651.991703, 0.0, 3.4)
 
 
 def test_simulate_ladder_golden():
@@ -205,32 +206,21 @@ def test_simulate_hybrid_golden():
 
 # ---------------------------------------------------------------- 已知缺陷钉现状
 
-def test_ladder_paper_plan_degrades_to_naive_current():
-    """D3 现状（bug）：PLANS 注册了 ladder，但 fraction_for 无分支、
-    derive_paper_trades 不看价格档位 → ladder 模拟盘 == 朴素日投。
-    T3.4 修复后本测试应删除（换成 test_ladder_paper_uses_grid_engine）。"""
-    days, prices, prem = short_series()
-    lad = derive_paper_trades("ladder", {"daily": 200.0}, days, prices,
-                              prem, start=days[0])
-    nai = derive_paper_trades("naive", {"daily": 200.0}, days, prices,
-                              prem, start=days[0])
-    assert [(t.day, round(t.qty, 9)) for t in lad] == \
-        [(t.day, round(t.qty, 9)) for t in nai]
-    assert len(lad) == 40
-
-
-@pytest.mark.xfail(strict=True, reason="docs/19 D3：T3.4 修复后转绿（届时删标记）")
 def test_ladder_paper_uses_grid_engine():
-    """D3 修复后的期望行为：ladder 模拟盘产出的成交应遵循价格档位
-    （不含 5% 跌破档的普通日也应只有档位触发），而非每日等额。"""
+    """D3 修复后：ladder 模拟盘走 simulate_ladder 网格引擎——
+    成交只在价格档触发（非每日等额），且可含卖出腿。"""
     days, prices, prem = short_series()
     lad = derive_paper_trades(
         "ladder", {"daily": 200.0, "base_price": prices[0],
                    "buy_levels": [(-0.05, 1.0), (-0.10, 2.0)],
-                   "sell_levels": [(0.15, 0.25), (0.25, 0.35), (0.40, 0.50)]},
+                   "sell_levels": [(0.10, 0.25)]},
         days, prices, prem, start=days[0])
     amounts = {round(t.amount, 2) for t in lad}
-    assert amounts != {200.0}   # 不该是朴素日投的等额流水
+    assert amounts != {200.0}           # 不再是朴素日投的等额流水
+    assert len(lad) < len(days)         # 档位触发制：非每日成交
+    # 买入档金额 = daily × mult（200 / 400）
+    assert {200.0, 400.0} & amounts
+    assert any(t.action == "sell" for t in lad)   # 卖出腿在流水里
 
 
 def test_weekly_calendar_canonical_is_gap5():

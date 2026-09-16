@@ -696,8 +696,12 @@ def create_app(*, with_scheduler: bool = False) -> FastAPI:
                     trades = derive_paper_trades(plan, params, days, raw,
                                                  prem, start=start_day)
                     flows = planned_flows(plan, params, days, start_day)
+                    # 账户现金 = Σ计划投入 − Σ买入 + Σ卖出净额（ladder 网格回笼）
                     cash = max(0.0, sum(a for _, a in flows)
-                               - sum(t.amount for t in trades))
+                               - sum(t.amount for t in trades
+                                     if t.action == "buy")
+                               + sum(t.amount - t.fee for t in trades
+                                     if t.action == "sell"))
                     v = value_trades(trades, dict(zip(days, raw)), days[-1],
                                      cash=cash, flows=flows)
                 else:
@@ -713,10 +717,13 @@ def create_app(*, with_scheduler: bool = False) -> FastAPI:
                     prev_cash = 0.0
                     if kind == "paper" and flows:
                         pf = [f for f in flows if f[0] <= prev_day]
+                        pt = [t for t in trades if t.day <= prev_day]
                         prev_cash = max(
                             0.0, sum(a for _, a in pf)
-                            - sum(t.amount for t in trades
-                                  if t.day <= prev_day))
+                            - sum(t.amount for t in pt
+                                  if t.action == "buy")
+                            + sum(t.amount - t.fee for t in pt
+                                  if t.action == "sell"))
                     pv = value_trades(
                         trades, dict(zip(days, raw)), prev_day,
                         cash=prev_cash,
@@ -918,12 +925,16 @@ def create_app(*, with_scheduler: bool = False) -> FastAPI:
 
             hist = None
             if params["daily"]:
+                from libre_quant.config import get_settings
+                s_fee = get_settings()
                 h = run_history(days, adj, daily=params["daily"],
                                 dip_drop=params["dip_drop"],
                                 dip_mult=params["dip_mult"],
                                 rise_gain=params["rise_gain"],
                                 sell_pct=params["sell_pct"],
-                                premium_max=params["premium_max"], prem=prem)
+                                premium_max=params["premium_max"], prem=prem,
+                                fee_rate=s_fee.trading_fee_rate,
+                                fee_min=s_fee.trading_fee_min)
                 step = max(1, len(h["curve"]) // 500)
                 hist = {**{k: v for k, v in h.items() if k != "rows"},
                         "curve": h["curve"][::step],

@@ -14,6 +14,8 @@ from __future__ import annotations
 import math
 from datetime import date
 
+from libre_quant.accounts import DEFAULT_FEE_MIN, DEFAULT_FEE_RATE
+
 TRADING_DAYS = 244
 
 
@@ -54,66 +56,83 @@ def run_history(days: list[date], prices: list[float], *,
                 daily: float, dip_drop: float | None = None,
                 dip_mult: float = 0.0, rise_gain: float | None = None,
                 sell_pct: float = 0.0, premium_max: float | None = None,
-                prem: dict[date, float] | None = None) -> dict:
+                prem: dict[date, float] | None = None,
+                fee_rate: float = DEFAULT_FEE_RATE,
+                fee_min: float = DEFAULT_FEE_MIN) -> dict:
     """把你的策略参数跑一遍历史：每天投入，按规则多买/卖出/不买。
 
-    * 跌超过 ``dip_drop``（如 -0.05）→ 当天买入 ``daily × (1 + dip_mult)``
+    * 跌超过 ``dip_drop``（如 -0.05）→ 当天存入 ``daily × (1 + dip_mult)``
     * 涨超过 ``rise_gain``（如 0.05）→ 卖出持仓的 ``sell_pct``
-    * 溢价超过 ``premium_max`` → 当天不买
+    * 溢价超过 ``premium_max`` → 当天不买（钱进待投现金，不蒸发）
+
+    docs/19 T3.3 起为 ``dca.run_cashflow`` 统一引擎的配置表达，并按
+    权威口径表修正两处旧账：**所有买卖一律计佣金**（旧版零佣金）、
+    **闸门日资金进 cash 不蒸发**（旧版暂停日的 daily 凭空消失）。
+    ``invested`` = Σ 计划存入（含多码与暂停日）；卖出回笼先进现金，
+    下一买入日连本带额投出（"回笼的钱不闲置"）。
     """
+    from libre_quant.dca import run_cashflow
+    from libre_quant.ledger import drawdown
+
     prem = prem or {}
-    units = 0.0
-    cash = 0.0        # 卖出回笼的现金（必须计入账户价值，否则凭空产生回撤）
-    invested = 0.0
-    buys = sells = skips = 0
-    curve: list[float] = []
-    rows: list[dict] = []
+    idx = {d: t for t, d in enumerate(days)}
 
-    for t, d in enumerate(days):
-        amount = daily
-        action = "买入"
-        p = prem.get(d)
-        if premium_max is not None and p is not None and p > premium_max:
-            amount, action = 0.0, "不买"
-            skips += 1
-        elif (dip_drop is not None and dip_mult > 0 and t >= 7
-              and prices[t] / prices[t - 7] - 1 <= dip_drop):
-            amount = daily * (1 + dip_mult)
-            action = "多买"
-        elif (rise_gain is not None and sell_pct > 0 and t >= 7
-              and prices[t] / prices[t - 7] - 1 >= rise_gain and units > 0):
-            qty = units * sell_pct
-            units -= qty
-            cash += qty * prices[t]
-            amount = -qty * prices[t]
-            action = "卖出"
-            sells += 1
+    def dip_hit(t):
+        return (dip_drop is not None and dip_mult > 0 and t >= 7
+                and prices[t] / prices[t - 7] - 1 <= dip_drop)
 
-        if amount > 0:
-            # 手上现金先花（卖出回笼的钱不闲置）；不够的部分才是新投入
-            if cash >= amount:
-                cash -= amount
-            else:
-                invested += amount - cash
-                cash = 0.0
-            units += amount / prices[t]
-            buys += 1
-        curve.append(units * prices[t] + cash)
-        rows.append({"day": str(d), "price": prices[t], "action": action,
-                     "amount": round(amount, 2), "units": round(units, 2),
-                     "value": round(curve[-1], 2)})
+    def rise_hit(t):
+        return (rise_gain is not None and sell_pct > 0 and t >= 7
+                and prices[t] / prices[t - 7] - 1 >= rise_gain)
 
-    value = curve[-1] if curve else 0.0
-    peak, dd = float("-inf"), 0.0
-    for v in curve:
-        peak = max(peak, v)
-        dd = max(dd, 1 - v / peak if peak > 0 else 0.0)
+    def gated(t):
+        p = prem.get(days[t])
+        return premium_max is not None and p is not None and p > premium_max
+
+    def deposit(t, d):
+        return daily * (1 + dip_mult) if dip_hit(t) else daily
+
+    def spendable(t, d, cash, sold=0.0):
+        # 旧 elif 链语义：闸门日不买；卖出日不追买（回笼的钱下一买入日再投）
+        if gated(t) or sold > 0:
+            return 0.0
+        return 1.0
+
+    def sell(t, d, units):
+        # 旧 elif 链语义：闸门日不卖出（先判闸门，再判涨过阈值）
+        return 0.0 if gated(t) else (units * sell_pct if rise_hit(t) else 0.0)
+
+    r = run_cashflow(days, prices, deposit=deposit, spendable=spendable,
+                     fee_rate=fee_rate, fee_min=fee_min, sell=sell,
+                     premium=prem)
+
+    rows = []
+    for row in r["journal"]:
+        t = idx[row["day"]]
+        if row["sold"] > 0:
+            action, amount = "卖出", -row["sold"]
+        elif row["planned"] > 0 and row["bought"] <= 0:
+            action, amount = "不买", 0.0
+        elif row["bought"] > 0 and dip_hit(t):
+            action, amount = "多买", row["bought"]
+        elif row["bought"] > 0:
+            action, amount = "买入", row["bought"]
+        else:
+            action, amount = "持有", 0.0
+        rows.append({"day": str(row["day"]), "price": row["price"],
+                     "action": action, "amount": round(amount, 2),
+                     "units": round(row["units"], 2),
+                     "value": round(row["value"], 2)})
+
+    invested, value = r["invested"], r["value"]
     return {
         "invested": invested, "value": value,
         "profit": value - invested,
         "profit_pct": (value / invested - 1) if invested else None,
-        "max_dd": dd, "buys": buys, "sells": sells, "skips": skips,
-        "units": units, "cash": cash, "curve": curve, "rows": rows,
+        "max_dd": drawdown(r["curve"]),
+        "buys": r["buys"], "sells": r["sells"], "skips": r["pauses"],
+        "units": r["units"], "cash": r["cash"], "fees": r["fees"],
+        "curve": r["curve"], "rows": rows,
     }
 
 

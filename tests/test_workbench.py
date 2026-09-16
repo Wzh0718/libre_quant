@@ -97,15 +97,24 @@ def test_price_detail_changes_use_adj():
 
 
 def test_sell_proceeds_stay_in_account():
-    """卖出后回笼的现金必须计入账户价值（否则凭空产生回撤/亏损）。"""
+    """卖出后回笼的现金必须计入账户价值（否则凭空产生回撤/亏损）。
+
+    T3.3 统一引擎后的语义：卖出日不追买（旧 elif 链语义），回笼先进
+    cash，**下一买入日**连本带额再投出（"回笼的钱不闲置"）——所以期末
+    cash 未必 > 0，守恒改由 invested/fees/价值恒等共同守护。"""
     days = _days(30)
     prices = [1.0]
     for i in range(1, 30):
         prices.append(prices[-1] * (1.02 if i % 3 == 0 else 1.001))
+    h0 = run_history(days, prices, daily=200.0)
     h = run_history(days, prices, daily=200.0, rise_gain=0.05, sell_pct=0.5)
     assert h["sells"] > 0
-    # 价值 = 持仓市值 + 现金；不应因卖出而低于投入太多
-    last = h["rows"][-1]
     assert h["value"] == h["curve"][-1]
-    assert h["cash"] > 0
+    # 卖出不是新投入：两版计划存入相同
+    assert h["invested"] == h0["invested"] == 200.0 * 30
+    # 卖出也计佣金（新口径：所有买卖一律计费）
+    assert h["fees"] > h0["fees"]
+    # 上升趋势 + 回笼再投出：开启卖出的期末价值不应显著低于不卖
+    assert h["value"] >= h0["value"] * 0.9
+    last = h["rows"][-1]
     assert last["value"] >= h["invested"] * 0.9
