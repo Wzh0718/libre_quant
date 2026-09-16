@@ -24,13 +24,13 @@
 from __future__ import annotations
 
 import sys
-from bisect import bisect_right
-from datetime import date, timedelta
+from datetime import date, timedelta  # noqa: F401 (timedelta 供外部复用)
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from libre_quant.attrib import make_overnight_lookup, us_returns  # noqa: E402
 from libre_quant.backtest import (  # noqa: E402
     COST_PER_SIDE, metrics,
     sig_ma_filter_trend,
@@ -59,27 +59,6 @@ def pearson(xs: list[float], ys: list[float]) -> tuple[float, int]:
     if vx == 0 or vy == 0:
         return float("nan"), n
     return cov / (vx * vy), n
-
-
-def us_returns(us_closes: dict[date, float]) -> dict[date, float]:
-    days = sorted(us_closes)
-    return {d: us_closes[d] / us_closes[p] - 1
-            for p, d in zip(days, days[1:])}
-
-
-def make_overnight_lookup(us_rets: dict[date, float]):
-    """返回 f(day) -> A 股 day 开盘前已知的最近一次美股收益。
-
-    US 日期 D 的 session 于北京时间 D+1 凌晨结束，故 day 前已完成的
-    session 为 US 日期 ≤ day-1。
-    """
-    days = sorted(us_rets)
-
-    def f(day: date) -> float | None:
-        i = bisect_right(days, day - timedelta(days=1))
-        return us_rets[days[i - 1]] if i >= 1 else None
-
-    return f
 
 
 def tonight(us_rets: dict[date, float], day: date) -> float | None:

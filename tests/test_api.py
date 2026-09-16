@@ -161,3 +161,99 @@ def test_real_account_day_pnl_excludes_new_principal(monkeypatch):
     # 持仓估值走 ledger（units/avg_cost/fees 齐全）
     assert item["units"] == pytest.approx(150.0)
     assert item["fees"] == pytest.approx(0.2)
+
+
+def test_analysis_without_nav_returns_empty_not_500(monkeypatch):
+    """纯股票（无净值/溢价）打开深度分析页：空态 200，不再是 KeyError 500
+    （docs/19 T4.3a；旧版 nav_map[win[0]] 直接 KeyError）。"""
+    from datetime import date, timedelta
+
+    import libre_quant.store as store
+
+    days = []
+    d = date(2024, 1, 1)
+    while len(days) < 30:
+        if d.weekday() < 5:
+            days.append(d)
+        d += timedelta(days=1)
+
+    class _StubConn:
+        def close(self):
+            pass
+
+    monkeypatch.setattr(store, "connect", lambda: _StubConn())
+    monkeypatch.setattr(store, "load_series",
+                        lambda conn, code: (days, [10.0] * 30,
+                                            [10.0] * 30, "price"))
+    monkeypatch.setattr(store, "load_premiums", lambda conn, code: {})
+
+    client = TestClient(create_app())
+    r = client.get("/api/analysis?code=600519")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["empty"] is True
+    assert "净值" in body["note"]
+
+
+def test_account_attribution_daily_red_green(monkeypatch):
+    """当日红绿归因端点：QDII 账户的今日盈亏拆成 美股/汇率/溢价残差/费用，
+    恒等式（分项和 == 市场项；pnl == 市场 − 费用）在 API 层仍成立。"""
+    from datetime import date, timedelta
+
+    import libre_quant.store as store
+
+    days = []
+    d = date(2024, 1, 1)
+    while len(days) < 30:
+        if d.weekday() < 5:
+            days.append(d)
+        d += timedelta(days=1)
+    raw = [10.0, 10.3, 10.1, 10.4, 10.2] * 6        # 30 天，日内 ±3%
+    trades = [(days[0], "buy", 10.0, 100.0, 1000.0, 0.1, ""),
+              (days[-1], "buy", raw[-1], 19.9, 200.0, 0.1, "")]
+
+    # 美股代理与汇率（US 日期对齐：A股 T 日用 US ≤ T-1 的最近收益）
+    us_days = [dd - timedelta(days=1) for dd in days[:10]]
+    us_closes = {ud: 100.0 + i for i, ud in enumerate(us_days)}
+    fx = {dd: 7.2 + 0.01 * (i % 3) for i, dd in enumerate(days[:10])}
+
+    class _StubConn:
+        def close(self):
+            pass
+
+    monkeypatch.setattr(store, "connect", lambda: _StubConn())
+    monkeypatch.setattr(store, "get_account",
+                        lambda conn, aid: (7, "实盘QDII", "real", "159941",
+                                           "naive", {}, days[0]))
+    monkeypatch.setattr(store, "load_series",
+                        lambda conn, code: (days, raw[:], raw[:], "price"))
+    monkeypatch.setattr(store, "load_premiums", lambda conn, code: {})
+    monkeypatch.setattr(store, "account_trades",
+                        lambda conn, aid: trades if aid == 7 else [])
+    monkeypatch.setattr(store, "load_closes",
+                        lambda conn, code: (sorted(us_closes),
+                                            [us_closes[k]
+                                             for k in sorted(us_closes)]))
+    monkeypatch.setattr(store, "load_macro",
+                        lambda conn, series, start=None, end=None:
+                        fx if series == "usdcnh" else {})
+
+    client = TestClient(create_app())
+    r = client.get("/api/accounts/7/attribution?window=20")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["factors"]["us_proxy"] == "qqq"
+    assert body["factors"]["has_fx"] is True
+    rows = body["rows"]
+    assert rows and len(rows) <= 20
+    for row in rows:
+        parts = (row["us_overnight"] or 0.0) + (row["fx"] or 0.0) \
+            + (row["premium_resid"] or 0.0)
+        assert parts == pytest.approx(row["market"], abs=1e-6)
+        assert row["day_pnl"] == pytest.approx(
+            row["market"] - row["fees"], abs=1e-6)
+    # 最新行是今天：字段齐全
+    latest = body["latest"]
+    assert latest["us_overnight"] is not None
+    assert latest["fx"] is not None
+    assert latest["premium_resid"] is not None

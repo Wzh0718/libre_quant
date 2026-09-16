@@ -93,43 +93,53 @@ def ingest_one(conn, asset: Asset, end: date) -> dict:
 
 
 def run(codes: list[str], *, dry_run: bool, init_db: bool, end: date) -> int:
-    assets = [resolve_one(c) for c in codes]
+    """整轮采集：单标的失败只记录、不拖垮后续标的（docs/19 T4.3 修复：
+    旧版任一标的抛异常会中断整轮，且异常路径连接不关闭）。"""
     conn = None if dry_run else store.connect()
-    if conn is not None and init_db:
-        store.init_db(conn)
-        print("[init-db] schema 就绪")
+    try:
+        if conn is not None and init_db:
+            store.init_db(conn)
+            print("[init-db] schema 就绪")
 
-    for asset in assets:
-        r = ingest_one(conn, asset, end)
-        print(f"[price] {asset.code:<7} {asset.name:<12} {r['bars']:>5} 根  "
-              f"{r['price_span']}" + (f"（+qfq {r['qfq']}）" if r["qfq"] else ""))
+        failures: list[str] = []
+        for code in codes:
+            try:
+                asset = resolve_one(code)
+                r = ingest_one(conn, asset, end)
+            except Exception as e:  # noqa: BLE001 —— 单标的失败不拖垮整轮
+                failures.append(code)
+                print(f"[fail]  {code:<7} {str(e)[:80]}")
+                continue
+            print(f"[price] {asset.code:<7} {asset.name:<12} {r['bars']:>5} 根  "
+                  f"{r['price_span']}" + (f"（+qfq {r['qfq']}）" if r["qfq"] else ""))
+            if conn is not None:
+                print(f"        ↑ 入库 {r['price_rows']} 行")
+            if asset.is_onshore_etf:
+                print(f"[nav]   {asset.code:<7} {asset.name:<12} {r['navs']:>5} 条  "
+                      f"{r['nav_span']}")
+                if conn is not None:
+                    print(f"        ↑ 入库 {r['nav_rows']} 行")
+            if conn is not None and asset.is_onshore_etf:
+                tip = (f"  最新 {r['prem_day']}: {r['prem_latest']:+.2%} "
+                       f"(nav {r['prem_nav_day']}, lag={asset.nav_lag_days})"
+                       if r["prem_latest"] is not None else "")
+                print(f"[prem]  {asset.code:<7} 刷新 {r['prem_rows']} 行{tip}")
+
+        # -- 场外因子（宏观日线：汇率/纳指/恒生；与标的列表无关，总是更新）------
+        for series, (label, _providers) in macro.SERIES.items():
+            try:
+                pts = macro.fetch_macro(series, date(2005, 1, 1), end)
+                span = f"{pts[0].day} ~ {pts[-1].day}" if pts else "-"
+                print(f"[macro] {series:<7} {label:<14} {len(pts):>5} 根  {span}")
+                if conn is not None:
+                    n = store.upsert_macro(conn, series, pts)
+                    print(f"        ↑ 入库 {n} 行")
+            except Exception as e:  # noqa: BLE001 —— 场外因子失败不阻塞主链路
+                print(f"[macro] {series:<7} 失败：{str(e)[:70]}")
+    finally:
         if conn is not None:
-            print(f"        ↑ 入库 {r['price_rows']} 行")
-        if asset.is_onshore_etf:
-            print(f"[nav]   {asset.code:<7} {asset.name:<12} {r['navs']:>5} 条  "
-                  f"{r['nav_span']}")
-            if conn is not None:
-                print(f"        ↑ 入库 {r['nav_rows']} 行")
-        if conn is not None and asset.is_onshore_etf:
-            tip = (f"  最新 {r['prem_day']}: {r['prem_latest']:+.2%} "
-                   f"(nav {r['prem_nav_day']}, lag={asset.nav_lag_days})"
-                   if r["prem_latest"] is not None else "")
-            print(f"[prem]  {asset.code:<7} 刷新 {r['prem_rows']} 行{tip}")
-
-    # -- 场外因子（宏观日线：汇率/纳指/恒生；与标的列表无关，总是更新）------
-    for series, (label, _providers) in macro.SERIES.items():
-        try:
-            pts = macro.fetch_macro(series, date(2005, 1, 1), end)
-            span = f"{pts[0].day} ~ {pts[-1].day}" if pts else "-"
-            print(f"[macro] {series:<7} {label:<14} {len(pts):>5} 根  {span}")
-            if conn is not None:
-                n = store.upsert_macro(conn, series, pts)
-                print(f"        ↑ 入库 {n} 行")
-        except Exception as e:  # noqa: BLE001 —— 场外因子失败不阻塞主链路
-            print(f"[macro] {series:<7} 失败：{str(e)[:70]}")
-
-    if conn is not None:
-        conn.close()
+            conn.close()
     mode = "（dry-run：未连数据库）" if dry_run else ""
-    print(f"\n完成{mode}")
-    return 0
+    tail = f"（{len(failures)} 个标的失败：{','.join(failures)}）" if failures else ""
+    print(f"\n完成{mode}{tail}")
+    return 0 if not failures else 1

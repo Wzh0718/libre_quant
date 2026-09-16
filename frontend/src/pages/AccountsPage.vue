@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
 import {
-  addTrade, createAccount, deleteAccount, fetchAccounts, fetchOutlook,
-  fetchPlans, fmtPct, fmtYuan,
-  type AccountRow, type OutlookData, type PlanItem,
+  addTrade, createAccount, deleteAccount, fetchAccounts, fetchAttribution,
+  fetchOutlook, fetchPlans, fmtPct, fmtYuan,
+  type AccountRow, type AttributionData, type OutlookData, type PlanItem,
 } from "../api";
 import { assets, refreshAssets } from "../store";
 
@@ -24,6 +24,10 @@ const tradeForm = ref({ aid: 0, day: "", price: 0, qty: 100 });
 // ---- 预案
 const outlook = ref<OutlookData | null>(null);
 const outlookFor = ref<number | null>(null);
+
+// ---- 当日红绿归因
+const attrib = ref<AttributionData | null>(null);
+const attribFor = ref<number | null>(null);
 
 const rows = ref<AccountRow[]>([]);
 
@@ -89,9 +93,24 @@ async function showOutlook(aid: number) {
   }
 }
 
+async function showAttrib(aid: number) {
+  attribFor.value = attribFor.value === aid ? null : aid;
+  attrib.value = null;
+  if (attribFor.value === null) return;
+  try {
+    attrib.value = await fetchAttribution(aid, 30);
+  } catch (e) {
+    err.value = e instanceof Error ? e.message : String(e);
+  }
+}
+
+const signedYuan = (v: number | null | undefined) =>
+  v == null ? "—" : `${v >= 0 ? "+" : ""}${fmtYuan(v)}`;
+
 async function remove(aid: number) {
   await deleteAccount(aid);
   if (outlookFor.value === aid) { outlook.value = null; outlookFor.value = null; }
+  if (attribFor.value === aid) { attrib.value = null; attribFor.value = null; }
   await load();
 }
 
@@ -198,7 +217,71 @@ onMounted(async () => { await refreshAssets(); await load(); });
       <button class="badge badge-hold" style="cursor:pointer" @click="showOutlook(a.id)">
         未来 3 天预案
       </button>
+      <button
+        class="badge"
+        :class="(a.day_pnl ?? 0) >= 0 ? 'badge-buy' : 'badge-pause'"
+        style="cursor:pointer" @click="showAttrib(a.id)">
+        {{ attribFor === a.id ? "收起归因" : "为什么红/绿" }}
+      </button>
       <button class="badge badge-pause" style="cursor:pointer" @click="remove(a.id)">删除</button>
+    </div>
+
+    <div v-if="attribFor === a.id && attrib" style="margin-top:12px">
+      <template v-if="attrib.latest">
+        <div class="muted" style="font-size:12px">
+          {{ attrib.latest.day }}：今日盈亏
+          <span :style="(attrib.latest.day_pnl ?? 0) >= 0
+                        ? 'color:var(--green)' : 'color:var(--red)'">
+            {{ signedYuan(attrib.latest.day_pnl) }} 元
+            （{{ fmtPct(attrib.latest.day_pnl_pct) }}）
+          </span>
+          = 市场波动 {{ signedYuan(attrib.latest.market) }}
+          <template v-if="attrib.latest.us_overnight != null">
+            （美股隔夜 {{ signedYuan(attrib.latest.us_overnight) }}
+            <template v-if="attrib.latest.fx != null">
+              · 汇率 {{ signedYuan(attrib.latest.fx) }}</template>
+            · 溢价/残差 {{ signedYuan(attrib.latest.premium_resid) }}）
+          </template>
+          − 费用 {{ signedYuan(attrib.latest.fees) }}
+        </div>
+        <table style="margin-top:8px">
+          <thead><tr>
+            <th>日期</th><th>收盘价</th><th>当日盈亏</th>
+            <th v-if="attrib.factors.us_proxy">美股隔夜</th>
+            <th v-if="attrib.factors.has_fx">汇率</th>
+            <th v-if="attrib.factors.us_proxy">溢价/残差</th>
+            <th>费用</th>
+          </tr></thead>
+          <tbody>
+            <tr v-for="r in attrib.rows.slice().reverse().slice(0, 10)"
+                :key="r.day"
+                :style="(r.day_pnl ?? 0) >= 0 ? '' : 'color:var(--red)'">
+              <td class="num">{{ r.day }}</td>
+              <td class="num">{{ r.px_prev.toFixed(3) }} → {{ r.px_today.toFixed(3) }}</td>
+              <td class="num">{{ signedYuan(r.day_pnl) }}</td>
+              <td v-if="attrib.factors.us_proxy" class="num">
+                {{ signedYuan(r.us_overnight) }}</td>
+              <td v-if="attrib.factors.has_fx" class="num">{{ signedYuan(r.fx) }}</td>
+              <td v-if="attrib.factors.us_proxy" class="num">
+                {{ signedYuan(r.premium_resid) }}</td>
+              <td class="num">{{ signedYuan(r.fees) }}</td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="muted" style="font-size:12px;margin-top:6px">
+          近 {{ attrib.rows.length }} 个交易日合计：盈亏
+          {{ signedYuan(attrib.totals.day_pnl) }} 元 · 市场波动
+          {{ signedYuan(attrib.totals.market) }}
+          <template v-if="attrib.factors.us_proxy">
+            · 美股 {{ signedYuan(attrib.totals.us_overnight) }}
+            · 汇率 {{ signedYuan(attrib.totals.fx) }}
+            · 溢价/残差 {{ signedYuan(attrib.totals.premium_resid) }}
+          </template>
+          · 费用 {{ signedYuan(attrib.totals.fees) }}<br>
+          {{ attrib.note }}
+        </div>
+      </template>
+      <div v-else class="muted">暂无可归因的交易日（前一日无持仓）。</div>
     </div>
 
     <div v-if="outlookFor === a.id && outlook" style="margin-top:12px">

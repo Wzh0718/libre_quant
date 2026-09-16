@@ -142,6 +142,7 @@ libre_quant/
     ├── review.py / replay.py / policy.py / workbench.py / accounts.py
     │                            分析层：策略复盘/逐日重放/政策投放/策略台/我的盘
     ├── shadow.py                影子盘纯逻辑 + 每日步进/报告
+    ├── attrib.py                当日红绿归因：美股隔夜/汇率/溢价残差/费用（docs/20）
     ├── decomp.py                场外因素分解（标的/汇率/费用/溢价）
     └── data/
         ├── pcf.py               PCF 抓取 + 双格式解析

@@ -100,6 +100,8 @@ export interface Bucket {
 export interface AnalysisData {
   code: string;
   name: string;
+  empty?: boolean;
+  note?: string;
   prem_days: string[];
   prem_series: number[];
   analytics: {
@@ -442,6 +444,37 @@ export async function deleteAccount(aid: number): Promise<void> {
 
 export const fetchOutlook = (aid: number, n = 3) =>
   getJson<OutlookData>(`/api/accounts/${aid}/outlook?n=${n}`);
+
+// ---------------------------------------------------------------- 当日红绿归因
+
+export interface AttributionRow {
+  day: string;
+  px_prev: number;
+  px_today: number;
+  units_prev: number;
+  exposure_prev: number;
+  market: number;
+  us_overnight: number | null;
+  fx: number | null;
+  premium_resid: number | null;
+  fees: number;
+  intraday: number;
+  day_pnl: number;
+  day_pnl_pct: number | null;
+}
+
+export interface AttributionData {
+  account: { id: number; name: string; kind: string; code: string;
+             plan: string; start_day: string };
+  factors: { us_proxy: string | null; has_fx: boolean };
+  latest: AttributionRow | null;
+  rows: AttributionRow[];
+  totals: Record<string, number | null>;
+  note: string;
+}
+
+export const fetchAttribution = (aid: number, window = 30) =>
+  getJson<AttributionData>(`/api/accounts/${aid}/attribution?window=${window}`);
 
 // ---------------------------------------------------------------- 价格参考位
 

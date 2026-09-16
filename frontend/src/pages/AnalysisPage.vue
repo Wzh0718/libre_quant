@@ -39,6 +39,10 @@ watch(selectedCode, load);
     加载失败：{{ error }} <button class="badge badge-hold" style="cursor:pointer" @click="load">重试</button>
   </div>
   <template v-else-if="data">
+    <div v-if="data.empty" class="card muted state-block">
+      {{ data.note ?? "该标的暂不适用溢价分析" }}
+    </div>
+    <template v-else>
     <h2>{{ data.name }}（{{ data.code }}）溢价 · 全历史</h2>
     <div class="card">
       <MultiLineChart
@@ -141,5 +145,6 @@ watch(selectedCode, load);
         ]"
         aria-label="价格净值对比" />
     </div>
+    </template>
   </template>
 </template>

@@ -172,8 +172,13 @@ def create_app(*, with_scheduler: bool = False) -> FastAPI:
                 return {"code": code, "name": _name_of(code), "empty": True,
                         "note": "库中无数据，请先检索入库"}
             prem = store.load_premiums(conn, code)
+            if not prem:
+                # 纯股票等无净值标的：无溢价概念，返回空态而不是 500
+                return {"code": code, "name": _name_of(code), "empty": True,
+                        "note": "该标的无净值/溢价数据（纯股票）——"
+                                "溢价分析只适用于 ETF/基金"}
             pa = premium_analytics(days, adj, prem)
-            win = ([d for d in days if d in prem] or days)[-504:]
+            win = [d for d in days if d in prem][-504:]
             px0 = raw[days.index(win[0])] if win else 1.0
             with conn.cursor() as cur:
                 cur.execute(
@@ -781,6 +786,84 @@ def create_app(*, with_scheduler: bool = False) -> FastAPI:
         finally:
             conn.close()
         return {"ok": True}
+
+    @app.get("/api/accounts/{aid}/attribution")
+    def account_attribution(aid: int, window: int = 30) -> dict:
+        """当日红绿归因：最近 window 个交易日的盈亏拆成
+        美股隔夜 / 汇率 / 溢价残差 / 费用（QDII；境内标的后两项为 None）。"""
+        from fastapi import HTTPException
+
+        from libre_quant import store
+        from libre_quant.accounts import Trade, derive_paper_trades
+        from libre_quant.attrib import (
+            attribute_series, make_fx_return_lookup, make_overnight_lookup,
+            us_returns,
+        )
+        from libre_quant.ledger import valuation_summary
+        from libre_quant.universe import US_PROXY
+
+        conn = store.connect()
+        try:
+            row = store.get_account(conn, aid)
+            if not row:
+                raise HTTPException(404, "账户不存在")
+            _aid, name, kind, code, plan, params, start_day = row
+            days, raw, _adj, _src = store.load_series(conn, code)
+            if not days:
+                raise HTTPException(400, "标的数据为空")
+            prem = store.load_premiums(conn, code)
+            if kind == "paper":
+                trades = derive_paper_trades(plan, params, days, raw, prem,
+                                             start=start_day)
+            else:
+                trades = [Trade(day=d, action=a, price=float(p), qty=float(q),
+                                amount=float(am), fee=float(f), note=nt or "")
+                          for d, a, p, q, am, f, nt
+                          in store.account_trades(conn, aid)]
+
+            px = dict(zip(days, raw))
+            # 逐日收盘份额（as_of 折叠；窗口 + 起伏缓冲）
+            span = days[-(window + 10):] if len(days) > window + 10 else days
+            units_by_day = {d: valuation_summary(trades, px, d, as_of=d)["units"]
+                            for d in span}
+            fees_by_day: dict = {}
+            for t in trades:
+                fees_by_day[t.day] = fees_by_day.get(t.day, 0.0) + t.fee
+
+            overnight = None
+            fx_ret = None
+            proxy = US_PROXY.get(code)
+            if proxy:
+                ud, uc = store.load_closes(conn, proxy)
+                if ud:
+                    overnight = make_overnight_lookup(
+                        us_returns(dict(zip(ud, uc))))
+                fx = store.load_macro(conn, "usdcnh")
+                if fx:
+                    fx_ret = make_fx_return_lookup(fx)
+
+            rows = attribute_series(days, raw, units_by_day, fees_by_day,
+                                    overnight=overnight, fx_ret=fx_ret,
+                                    window=window)
+            totals = {
+                k: (sum(r[k] for r in rows if r[k] is not None) or None)
+                for k in ("day_pnl", "market", "us_overnight", "fx",
+                          "premium_resid", "fees")
+            }
+            return {
+                "account": {"id": aid, "name": name, "kind": kind,
+                            "code": code, "plan": plan,
+                            "start_day": str(start_day)},
+                "factors": {"us_proxy": proxy,
+                            "has_fx": fx_ret is not None},
+                "latest": rows[-1] if rows else None,
+                "rows": rows, "totals": totals,
+                "note": "溢价/残差为市场项减美股与汇率后的余项"
+                        "（含日内溢价变化与跟踪噪声）；不用滞后的已公布"
+                        "净值配对（docs/11 教训）。",
+            }
+        finally:
+            conn.close()
 
     @app.get("/api/accounts/{aid}/outlook")
     def account_outlook(aid: int, n: int = 3) -> dict:
