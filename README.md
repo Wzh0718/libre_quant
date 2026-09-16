@@ -113,6 +113,21 @@ cp .env.example .env   # 然后填写；.env 已进 .gitignore
 uv run python -m libre_quant.data.news "光模块 800G 最新进展"   # 需 TAVILY_TOKEN
 ```
 
+## 镜像与部署（CI 打包，Komodo 只拉取）
+
+本机没有 `docker buildx`，镜像统一在 GitHub Actions 里构建：
+
+- `.github/workflows/build-image.yml`：push `master` / 打 `v*` tag / 手动 dispatch 触发
+  → 先跑 pytest 门禁，再用 QEMU + Buildx 构建 `linux/amd64,linux/arm64` 推
+  `ghcr.io/wzh0718/libre_quant`（tag：`latest` 跟随 master、`sha-<短SHA>` 不可变可回滚、
+  git tag 原样转发）；CI 末尾按 digest 反查 manifest，缺任一平台即失败。
+  纯文档改动（`docs/**`、`**.md`）不触发重建。
+- Komodo：image 填 `ghcr.io/wzh0718/libre_quant:latest`，端口 8321，
+  环境变量注入 `DATABASE_URL`（必需）、`TAVILY_TOKEN` / `TRADING_FEE_*`（可选，见 `.env.example`）。
+- 仓库私有 ⇒ GHCR 包私有：Komodo 的 Registry 里需填一个带 `read:packages` 的 PAT
+  （用户名填 GitHub 用户名，密码填 PAT），等价于 `docker login ghcr.io -u <用户名> -p <PAT>`。
+- 回滚：把 image 换成 `ghcr.io/wzh0718/libre_quant:sha-<短SHA>` 重新部署。
+
 ## 项目结构
 
 ```
