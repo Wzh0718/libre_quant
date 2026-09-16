@@ -94,6 +94,16 @@
     仓库含多阶段 `Dockerfile`（node 构建前端 → python 运行时），
     `DATABASE_URL` 由 Komodo 环境注入（单账号即可，管理员权限）。
     5432 不暴露公网，跨机器走 wireguard/tailscale 或 SSH 隧道。
+  - **镜像发布（2026-09-16 修订：CI 打包，Komodo 只拉取）**：
+    `.github/workflows/build-image.yml` 在 push master / 打 `v*` tag / 手动
+    dispatch 时先跑 pytest 门禁，再用 QEMU + Buildx 构建
+    `linux/amd64,linux/arm64` 推 `ghcr.io/wzh0718/libre_quant`
+    （tag：`latest` 跟随 master、`sha-<短SHA>` 不可变可回滚、git tag 原样转发；
+    缓存走 `type=gha`）。这样 Komodo 不再从源码重建，只 `docker pull` 镜像起容器，
+    `DATABASE_URL`/`TAVILY_TOKEN` 仍由 Komodo 环境变量注入。
+    仓库私有 ⇒ GHCR package 私有，Komodo 侧配一个带 `read:packages` 的 PAT
+    （`docker login ghcr.io -u <用户名> -p <PAT>`）。
+    本机无 buildx、Dockerfile 又是 node→python 两段式，故构建放 CI 一次成型。
   - 安全：5432 **不暴露公网**，走 wireguard/tailscale 或 SSH 隧道。
   - 备份：`pg_dump` cron 即可（数据 <5 万行）。
   - 选型对比：原推荐 DuckDB 单文件的前提是"单机分析"，前提已不成立；

@@ -12,6 +12,12 @@ on:
   push:
     branches: [master]
     tags: ['v*']
+    # 纯文档改动不触发重建（docs/ 本就在 .dockerignore 里，进不了镜像；
+    # README 只在镜像里当说明文件，无运行影响）。
+    # 注：路径过滤对 tag push 与手动 dispatch 不生效，发版不受影响。
+    paths-ignore:
+      - 'docs/**'
+      - '**.md'
   workflow_dispatch:
 
 concurrency:
@@ -31,7 +37,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Install uv
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
         with:
@@ -52,7 +58,7 @@ jobs:
       packages: write
     steps:
       - name: Checkout
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up QEMU
         # arm64 层在 amd64 runner 上经 QEMU 模拟构建，多架构发布必需
@@ -94,6 +100,16 @@ jobs:
           cache-to: type=gha,mode=max
           # 不带 attestation：Komodo / 普通 docker pull 拉到的就是镜像本体
           provenance: false
+
+      - name: 校验已推送的 manifest（按 digest 反查）
+        # 用刚推上去的 digest 反查，确认远端确实是含两个 platform 的 OCI index
+        run: |
+          set -euo pipefail
+          OUT="$(docker buildx imagetools inspect "${IMAGE}@${{ steps.build.outputs.digest }}")"
+          echo "$OUT"
+          for P in linux/amd64 linux/arm64; do
+            grep -q "Platform: *${P}\$" <<<"$OUT" || { echo "::error::manifest 缺 ${P}"; exit 1; }
+          done
 
       - name: Summary
         run: |
