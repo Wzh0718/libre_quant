@@ -191,6 +191,8 @@ def value_trades(trades: list[Trade], prices: dict[date, float],
     if cf and len(cf) >= 20:
         from scripts.dca import xirr
         irr = xirr(cf, value, last_day)
+        if irr != irr:  # NaN 兜底：异常现金流不进 JSON（非法字面量）
+            irr = None
     return {
         "units": units, "invested": basis, "fees": fees,
         "holdings": holdings, "cash": cash,

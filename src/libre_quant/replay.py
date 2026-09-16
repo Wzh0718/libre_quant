@@ -141,6 +141,8 @@ def _summary(days: list[date], arm: dict) -> dict:
                  for j in journal if j["planned"] > 0]
     end_day = date.fromisoformat(journal[-1]["day"])
     irr = xirr(cashflows, arm["value"], end_day) if len(cashflows) >= 20 else None
+    if irr is not None and irr != irr:  # NaN 兜底，不进 JSON
+        irr = None
 
     peak, dd = float("-inf"), 0.0
     for v in arm["curve"]:

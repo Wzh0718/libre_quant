@@ -65,10 +65,15 @@ def xirr(cashflows: list[tuple[date, float]], end_value: float,
         v += end_value / (1 + r) ** yrs
         return v
 
-    lo, hi = 1e-6, 5.0
-    flo = npv(lo)
-    if flo * npv(hi) > 0:
-        return float("nan")  # 区间内无根（不应发生）
+    # 求根区间：负收益（亏损）是定投的正常结果，下界必须覆盖 (-100%, 0)；
+    # 短期高收益的根可能 > 5（年化 500%），上界自适应扩张到变号为止。
+    lo, hi = -1.0 + 1e-9, 5.0
+    flo, fhi = npv(lo), npv(hi)
+    while flo * fhi > 0 and hi < 1e10:
+        hi *= 4
+        fhi = npv(hi)
+    if flo * fhi > 0:
+        return float("nan")  # 无根（现金流异常，如无投入只有市值）
     for _ in range(200):
         mid = (lo + hi) / 2
         if (npv(mid) > 0) == (flo > 0):

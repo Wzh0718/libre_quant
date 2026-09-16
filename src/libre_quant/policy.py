@@ -95,6 +95,8 @@ def summarize(days: list[date], arm: dict, planned: float = 200.0) -> dict:
     cashflows = [(date.fromisoformat(j["day"]), planned)
                  for j in arm["journal"]]
     irr = xirr(cashflows, arm["value"], days[-1]) if len(cashflows) >= 20 else None
+    if irr is not None and irr != irr:  # NaN 兜底，不进 JSON
+        irr = None
     peak, dd = float("-inf"), 0.0
     for v in arm["curve"]:
         peak = max(peak, v)
