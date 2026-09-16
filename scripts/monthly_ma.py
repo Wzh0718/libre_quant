@@ -9,6 +9,8 @@
   >5% 时**禁止该次入场**（只拦 0→1，不强制平仓）——docs/07 §三的实证边界。
 * 对照组：QQQ（2001 起 24 年，底层资产本身）；515880（主题 ETF 对照）。
 
+信号与聚合在 ``libre_quant.timing``（docs/19 Phase 1 下沉）；本文件只剩 CLI。
+
 用法::
 
     uv run python scripts/monthly_ma.py            # N=5
@@ -18,88 +20,25 @@
 from __future__ import annotations
 
 import argparse
-import math
 import sys
 from datetime import date
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from libre_quant.backtest import COST_PER_SIDE  # noqa: E402
 from libre_quant.data.nav import fetch_nav_history  # noqa: E402
 from libre_quant.data.quotes import fetch_daily_all as fetch_all  # noqa: E402
 from libre_quant.data.us import fetch_us_daily  # noqa: E402
 from libre_quant.store import premium_rows  # noqa: E402
+from libre_quant.timing import (  # noqa: E402,F401 —— 兼容再出口
+    block_entries, daily_positions, month_series, monthly_sig,
+    net_timing, run_positions,
+)
 from libre_quant.universe import UNIVERSE, onshore_etfs  # noqa: E402
-from scripts.backtest import COST_PER_SIDE, TRADING_DAYS, metrics  # noqa: E402
 
 ASSETS = ["159941", "513100", "513500", "515880", "qqq"]
 PREM_BLOCK = 0.05  # 溢价禁买边界（docs/07 §三：>5% 前向收益转负）
-
-
-# ---------------------------------------------------------------- 月度信号
-
-def month_series(days, closes):
-    """月末序列：[((y,m), 月末收盘)]，升序。"""
-    me: dict[tuple[int, int], float] = {}
-    for d, c in zip(days, closes):
-        me[(d.year, d.month)] = c  # 升序遍历，同月最后一个覆盖
-    keys = sorted(me)
-    return keys, [me[k] for k in keys]
-
-
-def monthly_sig(keys, mcloses, n: int) -> list[float]:
-    """sig[i]：keys[i] 月末算出的信号，适用于第 i+1 个月。"""
-    sig = [0.0] * len(keys)
-    for i in range(n - 1, len(keys)):
-        ma = sum(mcloses[i - n + 1 : i + 1]) / n
-        sig[i] = 1.0 if mcloses[i] > ma else 0.0
-    return sig
-
-
-def block_entries(keys, sig, prem_at_month_end: dict, thresh: float):
-    """只拦 0→1 入场：信号月月末溢价 > thresh 则该次入场被禁。"""
-    out = list(sig)
-    blocked = 0
-    for i in range(1, len(out)):
-        if out[i] == 1.0 and out[i - 1] == 0.0:
-            if prem_at_month_end.get(keys[i], 0.0) > thresh:
-                out[i] = 0.0
-                blocked += 1
-    return out, blocked
-
-
-def daily_positions(days, keys, sig) -> list[float]:
-    """第 i 个月的所有交易日持有 sig[i-1]（上月末信号）。"""
-    idx = {k: i for i, k in enumerate(keys)}
-    return [sig[idx[(d.year, d.month)] - 1]
-            if idx[(d.year, d.month)] - 1 >= 0 else 0.0
-            for d in days]
-
-
-def run_positions(days, closes, pos) -> tuple:
-    """逐日收益聚合（与 backtest.run 同一口径）。返回 (Metrics, trades)。"""
-    daily = []
-    trades = 0
-    prev = 0.0
-    for t in range(1, len(closes)):
-        r = closes[t] / closes[t - 1] - 1
-        turn = abs(pos[t] - prev)
-        if turn > 1e-9:
-            trades += 1
-        daily.append(pos[t] * r - turn * COST_PER_SIDE)
-        prev = pos[t]
-    exposure = sum(1 for p in pos[1:] if p > 1e-9) / max(1, len(pos) - 1)
-    return metrics(daily, exposure, trades), trades
-
-
-def net_timing(days, closes, pos) -> float:
-    """对数空间净择时（与 attribution 同定义）。"""
-    acc = 0.0
-    for t in range(1, len(closes)):
-        r = closes[t] / closes[t - 1] - 1
-        acc += math.log1p(pos[t] * r) - math.log1p(r)
-    return acc
 
 
 # ---------------------------------------------------------------- 主程序

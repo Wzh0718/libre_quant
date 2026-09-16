@@ -51,7 +51,7 @@ def _run_once(codes: list[str] | None = None) -> dict:
     from datetime import date as _date
 
     from libre_quant import store
-    from scripts.ingest import ingest_one, resolve_one
+    from libre_quant.ingest import ingest_one, resolve_one
 
     _state["last_started"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     _state["last_error"] = None
@@ -90,7 +90,7 @@ def _run_once(codes: list[str] | None = None) -> dict:
             # 影子盘当日步进（docs/10；失败不影响采集主链路。
             # 静态看板重建不在此——Docker 形态由 /api/dashboard 动态聚合取代）
             try:
-                from scripts import shadow as shadow_mod
+                from libre_quant import shadow as shadow_mod
                 result["shadow"] = shadow_mod.run_daily(conn)
             except Exception as e:  # noqa: BLE001
                 result["shadow"] = f"失败: {str(e)[:60]}"

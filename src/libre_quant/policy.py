@@ -13,14 +13,10 @@
 from __future__ import annotations
 
 import math
-import sys
 from datetime import date
 
-from libre_quant.config import PROJECT_ROOT
+from libre_quant.metrics import xirr
 from libre_quant.shadow import GATE_THRESH
-
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
 
 TRADING_DAYS = 244
 
@@ -90,8 +86,6 @@ def run_policy(
 
 
 def summarize(days: list[date], arm: dict, planned: float = 200.0) -> dict:
-    from scripts.dca import xirr
-
     cashflows = [(date.fromisoformat(j["day"]), planned)
                  for j in arm["journal"]]
     irr = xirr(cashflows, arm["value"], days[-1]) if len(cashflows) >= 20 else None

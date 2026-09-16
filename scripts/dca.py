@@ -14,7 +14,8 @@
 * **XIRR**（资金加权年化）—— 定投之间比较的唯一公平口径
 * 市值最大回撤（含未投现金）、买入次数、总费用
 
-收益用前复权收盘模拟（份额折算/分红已入价格序列，单位=复权份）。
+引擎在 ``libre_quant.dca``、指标在 ``libre_quant.metrics``（docs/19
+Phase 1 下沉）；本文件只剩 CLI。
 
 用法::
 
@@ -26,107 +27,22 @@ from __future__ import annotations
 
 import argparse
 import sys
-from bisect import bisect_right
 from datetime import date
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from libre_quant.config import get_settings  # noqa: E402
 from libre_quant.data.nav import fetch_nav_history  # noqa: E402
 from libre_quant.data.quotes import fetch_daily_all as fetch_all  # noqa: E402
+from libre_quant.dca import simulate  # noqa: E402
+from libre_quant.metrics import fee, max_dd, xirr  # noqa: E402,F401 —— 兼容再出口
 from libre_quant.store import premium_rows  # noqa: E402
+from libre_quant.timing import daily_positions, month_series, monthly_sig  # noqa: E402
 from libre_quant.universe import UNIVERSE  # noqa: E402
-from scripts.monthly_ma import (  # noqa: E402
-    daily_positions, month_series, monthly_sig,
-)
 
 #: 对照组佣金口径（多数券商默认）：万2 费率 + 最低 5 元
 CONTRAST_RATE, CONTRAST_MIN = 0.0002, 5.0
-
-
-def fee(amount: float, rate: float, min_fee: float) -> float:
-    return max(amount * rate, min_fee)
-
-
-def xirr(cashflows: list[tuple[date, float]], end_value: float,
-         end_day: date) -> float:
-    """资金加权年化。cashflows: (日期, 存入金额)；存入视为流出（负），
-    期末市值 + 结余现金为流入（正）。解 NPV=0 的 r。"""
-    t0 = cashflows[0][0]
-
-    def npv(r: float) -> float:
-        v = 0.0
-        for d, amt in cashflows:
-            yrs = (d - t0).days / 365.0
-            v -= amt / (1 + r) ** yrs
-        yrs = (end_day - t0).days / 365.0
-        v += end_value / (1 + r) ** yrs
-        return v
-
-    # 求根区间：负收益（亏损）是定投的正常结果，下界必须覆盖 (-100%, 0)；
-    # 短期高收益的根可能 > 5（年化 500%），上界自适应扩张到变号为止。
-    lo, hi = -1.0 + 1e-9, 5.0
-    flo, fhi = npv(lo), npv(hi)
-    while flo * fhi > 0 and hi < 1e10:
-        hi *= 4
-        fhi = npv(hi)
-    if flo * fhi > 0:
-        return float("nan")  # 无根（现金流异常，如无投入只有市值）
-    for _ in range(200):
-        mid = (lo + hi) / 2
-        if (npv(mid) > 0) == (flo > 0):
-            lo = mid
-        else:
-            hi = mid
-    return (lo + hi) / 2
-
-
-def max_dd(values: list[float]) -> float:
-    peak, dd = float("-inf"), 0.0
-    for v in values:
-        peak = max(peak, v)
-        dd = max(dd, 1 - v / peak)
-    return dd
-
-
-def simulate(days, adj, plan, prem_ok, fee_rate: float, fee_min: float):
-    """通用定投模拟。plan(d)->当日计划金额；prem_ok(d)->bool 是否允许买入。
-
-    不允许时计划金额进 pending，下一允许日连本带额一起买。
-    返回 dict 结果。费用从买入金额中扣除（份额 = 扣费后金额 / 价格）。
-    """
-    units = 0.0
-    invested = 0.0
-    fees = 0.0
-    pending = 0.0
-    n_buys = 0
-    cashflows: list[tuple[date, float]] = []
-    values: list[float] = []
-
-    for d, p in zip(days, adj):
-        planned = plan(d)
-        if planned:
-            cashflows.append((d, planned))
-            invested += planned
-            if prem_ok(d) and planned + pending > 0:
-                amount = planned + pending
-                f = fee(amount, fee_rate, fee_min)
-                fees += f
-                units += max(0.0, amount - f) / p
-                n_buys += 1
-                pending = 0.0
-            else:
-                pending += planned
-        values.append(units * p + pending)
-
-    end_value = values[-1]
-    return {
-        "invested": invested, "value": end_value, "xirr": xirr(
-            cashflows, end_value, days[-1]),
-        "dd": max_dd(values), "buys": n_buys, "fees": fees,
-    }
 
 
 def main(argv=None) -> int:
@@ -160,6 +76,8 @@ def main(argv=None) -> int:
     monthly = args.daily * 20
 
     def is_first_of_week(d: date) -> bool:
+        # docs/19 D2 拍板：gap≥5 版是全站权威口径（libre_quant.timing.
+        # first_of_week）；本闭包 Phase 3 T3.0 删除，先保持现状对齐
         i = days.index(d)
         return i == 0 or (d - days[i - 1]).days >= 5 or d.weekday() < days[i - 1].weekday()
 
@@ -205,7 +123,6 @@ def main(argv=None) -> int:
     print(f"  · 溢价>5% 天数占比 {over5:.0%} —— 暂停策略会频繁攒钱，但买点更便宜")
     print(f"  · 你的券商（万0.5 / 最低0.1元）：日投 1 手单笔佣金 0.1 元 ≈ 0.06%，")
     print(f"    频率不再是成本问题；对照组（最低 5 元）则必须月投")
-    print(f"  · 当前溢价 +10.32%（>5%）：按规则，今天的 200 元应当暂停")
     return 0
 
 

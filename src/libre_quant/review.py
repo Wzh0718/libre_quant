@@ -1,22 +1,15 @@
 """看板分析层：策略复盘 / 溢价分析 / 今日决策推理（纯计算，离线可测）。
 
 数据组装在 ``api.py``（store 查询）；本模块只吃数组，全部函数可在无 DB
-环境下单测。所有口径与 scripts/backtest、scripts/dca、scripts/monthly_ma
-保持一致（直接复用其实现，不重复发明）。
+环境下单测。所有口径与 ``libre_quant.backtest`` / ``libre_quant.dca`` /
+``libre_quant.timing`` 保持一致（直接复用其实现，不重复发明）。
 """
 
 from __future__ import annotations
 
-import sys
 from datetime import date
 
-from libre_quant.config import PROJECT_ROOT
 from libre_quant.shadow import GATE_THRESH, gate_decision
-
-#: 复用 scripts/backtest、scripts/dca、scripts/monthly_ma 的实现，
-#: 需要仓库根在 sys.path（uvicorn/测试的 cwd 不保证）
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
 
 TRADING_DAYS = 244
 BUCKETS = [(-9.9, 0.0, "<0%"), (0.0, 0.01, "0~1%"), (0.01, 0.02, "1~2%"),
@@ -31,10 +24,11 @@ def strategy_review(days: list[date], closes: list[float]) -> dict:
     注意 ``run`` 的第二返回值已是**净值曲线**（不是日收益序列）。
     净值曲线第 t 点对应 days[t+1]。
     """
-    from scripts.backtest import (
+    from libre_quant.backtest import (
         equity_curve, run, sig_buy_hold, sig_ma_filter_trend, sig_vol_target,
     )
-    from scripts.monthly_ma import (
+    from libre_quant.dca import simulate
+    from libre_quant.timing import (
         daily_positions, month_series, monthly_sig, run_positions,
     )
 
@@ -105,7 +99,7 @@ def _downsample_dates(days: list[date], n: int = 600) -> list[str]:
 def dca_review(days: list[date], adj: list[float],
                prem: dict[date, float], above_ma5: dict[date, float],
                rate: float, min_fee: float, daily_amt: float = 200.0) -> list[dict]:
-    from scripts.dca import simulate
+    from libre_quant.dca import simulate
 
     weekly, monthly = daily_amt * 5, daily_amt * 20
     first_week = _first_of_week(days)

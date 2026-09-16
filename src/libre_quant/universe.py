@@ -29,6 +29,9 @@ SRC_TENCENT = "tencent"
 SRC_EASTMONEY = "eastmoney"
 SRC_SINA = "sina"
 
+#: QDII 底层映射（哪个 QDII 用哪只美股代理做定价研究；docs/07）
+US_PROXY = {"513100": "qqq", "513500": "spy", "159941": "qqq"}
+
 
 @dataclass(frozen=True, slots=True)
 class Asset:

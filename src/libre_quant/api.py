@@ -90,11 +90,8 @@ def create_app(*, with_scheduler: bool = False) -> FastAPI:
 
     @app.get("/api/dashboard")
     def dashboard() -> dict:
-        import sys
-        if str(PROJECT_ROOT) not in sys.path:
-            sys.path.insert(0, str(PROJECT_ROOT))
-        from scripts.dashboard import build_data
         from libre_quant import store
+        from libre_quant.overview import build_data
 
         conn = store.connect()
         try:
@@ -106,9 +103,9 @@ def create_app(*, with_scheduler: bool = False) -> FastAPI:
     def today(code: str = "159941") -> dict:
         """今日决策卡 + 推理链 + 信号轨迹。"""
         from libre_quant import store
+        from libre_quant.overview import _vol60
         from libre_quant.review import premium_analytics, today_decision
-        from scripts.dashboard import _vol60
-        from scripts.monthly_ma import month_series
+        from libre_quant.timing import month_series
 
         conn = store.connect()
         try:
@@ -202,7 +199,7 @@ def create_app(*, with_scheduler: bool = False) -> FastAPI:
         from libre_quant import store
         from libre_quant.config import get_settings
         from libre_quant.review import dca_review, strategy_review
-        from scripts.monthly_ma import (
+        from libre_quant.timing import (
             daily_positions, month_series, monthly_sig,
         )
 
@@ -232,7 +229,7 @@ def create_app(*, with_scheduler: bool = False) -> FastAPI:
         """场外因素分解：标的 / 汇率 / 费用残差 / 溢价效应（docs/11）。"""
         from libre_quant import store
         from libre_quant.decomp import return_decomposition
-        from scripts.qdii_pricing import US_PROXY
+        from libre_quant.universe import US_PROXY
 
         conn = store.connect()
         try:
@@ -263,7 +260,7 @@ def create_app(*, with_scheduler: bool = False) -> FastAPI:
         from libre_quant import store
         from libre_quant.config import get_settings
         from libre_quant.replay import replay_variants
-        from scripts.monthly_ma import (
+        from libre_quant.timing import (
             daily_positions, month_series, monthly_sig,
         )
 
@@ -362,7 +359,7 @@ def create_app(*, with_scheduler: bool = False) -> FastAPI:
         from fastapi import HTTPException
 
         from libre_quant import store
-        from scripts.ingest import ingest_one, resolve_one
+        from libre_quant.ingest import ingest_one, resolve_one
 
         try:
             asset = resolve_one(code)

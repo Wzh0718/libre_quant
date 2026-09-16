@@ -25,8 +25,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from libre_quant import store  # noqa: E402
 from libre_quant.config import get_settings  # noqa: E402
+from libre_quant.metrics import xirr as _xirr  # noqa: E402
 from libre_quant.policy import run_policy, summarize  # noqa: E402
-from scripts.dca import xirr as _xirr  # noqa: E402
 from libre_quant.shadow import GATE_THRESH  # noqa: E402
 
 PAIR = ("159941", "513100")  # 同底层（纳指）两只 ETF

@@ -31,18 +31,17 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from libre_quant.backtest import (  # noqa: E402
+    COST_PER_SIDE, metrics,
+    sig_ma_filter_trend,
+)
 from libre_quant.data.nav import fetch_nav_history  # noqa: E402
 from libre_quant.data.quotes import fetch_daily_all as fetch_all  # noqa: E402
 from libre_quant.data.us import fetch_us_daily  # noqa: E402
+from libre_quant.metrics import TRADING_DAYS  # noqa: E402
 from libre_quant.store import premium_rows  # noqa: E402
-from libre_quant.universe import UNIVERSE  # noqa: E402
-from scripts.backtest import (  # noqa: E402
-    COST_PER_SIDE, TRADING_DAYS, metrics,
-    sig_ma_filter_trend,
-)
+from libre_quant.universe import UNIVERSE, US_PROXY  # noqa: E402
 
-#: QDII → 美股代理（159941 广发为用户实际交易标的）
-US_PROXY = {"513100": "qqq", "513500": "spy", "159941": "qqq"}
 PREM_THRESH = 0.02  # 溢价禁买阈值
 
 
@@ -219,7 +218,7 @@ def main(argv=None) -> int:
 
         # [4] MA60 × 禁买
         sig = sig_ma_filter_trend(60)
-        from scripts.backtest import run as bt_run
+        from libre_quant.backtest import run as bt_run
         m0, _ = bt_run(cl, sig)
         m1, blocked = run_blocked(cl, days, sig, prem)
         print(f"\n[4] MA60 × 溢价>{PREM_THRESH:.0%} 禁买（只拦加仓，不强制平仓）：")

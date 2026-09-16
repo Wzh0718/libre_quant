@@ -15,15 +15,11 @@
 from __future__ import annotations
 
 import math
-import sys
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 
-from libre_quant.config import PROJECT_ROOT
+from libre_quant.metrics import xirr
 from libre_quant.shadow import GATE_THRESH
-
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
 
 TRADING_DAYS = 244
 
@@ -189,7 +185,6 @@ def value_trades(trades: list[Trade], prices: dict[date, float],
     cf = flows if flows is not None else [
         (tr.day, tr.amount) for tr in trades if tr.action == "buy"]
     if cf and len(cf) >= 20:
-        from scripts.dca import xirr
         irr = xirr(cf, value, last_day)
         if irr != irr:  # NaN 兜底：异常现金流不进 JSON（非法字面量）
             irr = None

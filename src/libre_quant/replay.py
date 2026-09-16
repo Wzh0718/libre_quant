@@ -9,14 +9,10 @@
 
 from __future__ import annotations
 
-import sys
 from datetime import date
 
-from libre_quant.config import PROJECT_ROOT
+from libre_quant.metrics import xirr
 from libre_quant.shadow import GATE_THRESH
-
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
 
 FILLS = ("close", "open", "mid")
 
@@ -131,8 +127,6 @@ def replay_variants(
 
 
 def _summary(days: list[date], arm: dict) -> dict:
-    from scripts.dca import xirr
-
     journal = arm["journal"]
     if not journal:
         return {}

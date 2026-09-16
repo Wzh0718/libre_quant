@@ -19,11 +19,12 @@ def test_health():
 
 
 def test_dashboard_returns_build_data(monkeypatch):
-    import scripts.dashboard as dash
+    import libre_quant.overview as overview
 
     fake = {"data_asof": "2026-09-15", "hero": {"code": "159941"},
             "assets": [], "shadow": {"days": 1}}
-    monkeypatch.setattr(dash, "build_data", lambda conn, hero="159941": fake)
+    monkeypatch.setattr(overview, "build_data",
+                        lambda conn, hero="159941": fake)
 
     class _StubConn:
         def close(self):
