@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
 import {
-  fetchAccounts, fetchWorkbench, fmtPct, fmtYuan, saveSimpleParams,
-  type AccountRow, type WorkbenchData,
+  fetchAccounts, fetchRefreshStatus, fetchWorkbench, fmtPct, fmtYuan,
+  saveSimpleParams, triggerRefresh,
+  type AccountRow, type RefreshStatus, type WorkbenchData,
 } from "../api";
 import MultiLineChart from "../components/MultiLineChart.vue";
 import { selectedCode } from "../store";
@@ -14,6 +15,8 @@ const accountId = ref<number | null>(null);
 const loading = ref(true);
 const err = ref<string | null>(null);
 const msg = ref<string | null>(null);
+const refresh = ref<RefreshStatus | null>(null);
+const refreshing = ref(false);
 
 const form = ref({
   daily: 200, premium_max: 5, dip_drop: -5, dip_mult: 2,
@@ -68,12 +71,32 @@ async function save() {
 }
 
 const realAccounts = computed(() => accounts.value.filter(a => a.kind === "real"));
+
+async function loadRefresh() {
+  refresh.value = await fetchRefreshStatus().catch(() => null);
+}
+
+async function doRefresh() {
+  refreshing.value = true;
+  try {
+    await triggerRefresh();
+    // 后台跑，轮询到结束
+    for (let i = 0; i < 60; i++) {
+      await new Promise(r => setTimeout(r, 3000));
+      await loadRefresh();
+      if (!refresh.value?.status.running) break;
+    }
+    await load();
+  } finally {
+    refreshing.value = false;
+  }
+}
 const histSeries = computed(() => data.value?.history
   ? [{ name: "这套参数的历史账户价值", values: data.value.history.curve,
        color: CHART_COLORS.green }]
   : []);
 
-onMounted(load);
+onMounted(async () => { await loadRefresh(); await load(); });
 watch([selectedCode, accountId], load);
 </script>
 
@@ -83,6 +106,22 @@ watch([selectedCode, accountId], load);
     出错了：{{ err }} <button class="badge badge-hold" style="cursor:pointer" @click="load">重试</button>
   </div>
   <template v-else-if="data && !data.empty">
+    <div class="card" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;
+                             margin-bottom:12px">
+      <span class="muted">数据截至</span>
+      <span class="num">{{ refresh?.data_as_of?.[data.code] ?? "—" }}</span>
+      <span class="muted">（今天 {{ refresh?.today }}）</span>
+      <button class="badge badge-hold" style="cursor:pointer" :disabled="refreshing"
+              @click="doRefresh">
+        {{ refreshing ? "刷新中…" : "更新数据" }}</button>
+      <span v-if="refresh?.status.last_finished" class="muted" style="font-size:12px">
+        上次刷新 {{ refresh.status.last_finished }}</span>
+      <span v-if="refresh?.status.last_error" style="color:var(--red);font-size:12px">
+        ⚠️ {{ refresh.status.last_error }}</span>
+      <span class="muted" style="font-size:12px;margin-left:auto">
+        服务启动时会自动补跑一轮；每个交易日 20:00 也会自动更新</span>
+    </div>
+
     <h2>今天该做什么 · {{ data.name }}（{{ data.code }}）</h2>
     <div class="grid cards">
       <div class="card" style="grid-column: span 2">

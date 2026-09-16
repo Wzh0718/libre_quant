@@ -651,3 +651,30 @@ export async function saveSimpleParams(code: string, s: SimpleParams): Promise<v
     throw new Error(errText(body, r.status));
   }
 }
+
+// ---------------------------------------------------------------- 数据刷新
+
+export interface RefreshState {
+  running: boolean;
+  last_started: string | null;
+  last_finished: string | null;
+  last_error: string | null;
+  last_result: { codes?: Record<string, { name?: string; bars?: number;
+    navs?: number; span?: string; error?: string }>;
+    macro?: Record<string, number | string> } | null;
+}
+
+export interface RefreshStatus {
+  status: RefreshState;
+  data_as_of: Record<string, string>;
+  today: string;
+}
+
+export const fetchRefreshStatus = () =>
+  getJson<RefreshStatus>("/api/refresh/status");
+
+export async function triggerRefresh(): Promise<{ started: boolean }> {
+  const r = await fetch("/api/refresh", { method: "POST" });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.json();
+}

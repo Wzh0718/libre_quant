@@ -68,14 +68,18 @@ def create_app(*, with_scheduler: bool = False) -> FastAPI:
         if with_scheduler:
             from apscheduler.schedulers.background import BackgroundScheduler
             from apscheduler.triggers.cron import CronTrigger
-            from scripts.serve import TZ, ingest_job
 
+            from libre_quant import jobs
+
+            TZ = "Asia/Shanghai"
+            # 启动即补跑一轮（否则不在 20:00 启动就永远是旧数据）
+            jobs.start_background()
             sched = BackgroundScheduler(timezone=TZ)
             sched.add_job(
-                ingest_job,
+                jobs.refresh_now,
                 CronTrigger(day_of_week="mon-fri", hour=20, minute=0,
                             timezone=TZ),
-                id="daily_ingest", max_instances=1, misfire_grace_time=3600,
+                id="daily_refresh", max_instances=1, misfire_grace_time=3600,
             )
             sched.start()
         yield
@@ -907,6 +911,30 @@ def create_app(*, with_scheduler: bool = False) -> FastAPI:
                     "plan_configured": plan is not None}
         finally:
             conn.close()
+
+    @app.post("/api/refresh")
+    def refresh(codes: str | None = None) -> dict:
+        """手动重跑数据（后台执行，立刻返回；用 /api/refresh/status 看进度）。"""
+        from libre_quant import jobs
+
+        wanted = [c.strip() for c in codes.split(",")] if codes else None
+        started = jobs.start_background(wanted)
+        return {"started": started, "status": jobs.status()}
+
+    @app.get("/api/refresh/status")
+    def refresh_status() -> dict:
+        """刷新状态 + 各标的数据截至日（复盘是否基于最新数据）。"""
+        from libre_quant import jobs, store
+
+        conn = store.connect()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT code, max(day) FROM price GROUP BY code")
+                last_days = {r[0]: str(r[1]) for r in cur.fetchall()}
+        finally:
+            conn.close()
+        return {"status": jobs.status(), "data_as_of": last_days,
+                "today": __import__("datetime").date.today().isoformat()}
 
     @app.get("/api/health")
     def health() -> dict:
