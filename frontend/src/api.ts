@@ -635,6 +635,7 @@ export interface SimpleParams {
 }
 
 export async function saveSimpleParams(code: string, s: SimpleParams): Promise<void> {
+  // 后端是 PATCH 语义：只传本页拥有的字段，其余（trend_gate/surge_factor 等）保留原值
   const p = new URLSearchParams({
     code,
     daily: String(s.daily),
@@ -642,7 +643,6 @@ export async function saveSimpleParams(code: string, s: SimpleParams): Promise<v
     dip_threshold: String(s.dip_drop),
     dip_mult: String(s.dip_mult),
     surge_threshold: String(s.rise_gain),
-    surge_factor: "1",
     sell_pct: String(s.sell_pct),
   });
   const r = await fetch(`/api/my-plan?${p}`, { method: "PUT" });

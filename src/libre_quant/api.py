@@ -564,41 +564,64 @@ def create_app(*, with_scheduler: bool = False) -> FastAPI:
             conn.close()
 
     @app.put("/api/my-plan")
-    def set_my_plan(daily: float, code: str = "159941",
-                    gate: float = 0.05, trend_gate: float = 0.0,
-                    dip_threshold: float = 0.0,
-                    dip_mult: float = 0.0,
-                    surge_threshold: float = 1.0,
-                    surge_factor: float = 1.0,
-                    sell_pct: float = 0.0) -> dict:
-        """设置我的定投参数（投多少 / 闸门阈值 / 主目标标的）。"""
+    def set_my_plan(daily: float | None = None, code: str | None = None,
+                    gate: float | None = None, trend_gate: float | None = None,
+                    dip_threshold: float | None = None,
+                    dip_mult: float | None = None,
+                    surge_threshold: float | None = None,
+                    surge_factor: float | None = None,
+                    sell_pct: float | None = None) -> dict:
+        """更新我的定投参数。**PATCH 语义**：未传的字段保留原值——
+        策略台（sell_pct 等）与今日决策页（trend_gate/surge 系）各管一部分字段，
+        整写语义下两页会互相静默抹掉对方的参数。"""
         from fastapi import HTTPException
 
         from libre_quant import store
 
-        if daily <= 0:
-            raise HTTPException(400, "每日金额必须大于 0")
-        if not (0 < gate < 1):
-            raise HTTPException(400, "闸门阈值需在 0~1 之间（如 0.05 = 5%）")
-        if trend_gate and not (0 < trend_gate < 1):
-            raise HTTPException(400, "趋势闸门需在 0~1 之间（0 = 关闭）")
-        if dip_mult < 0 or dip_mult > 10:
-            raise HTTPException(400, "加码倍数需在 0~10（0 = 关闭）")
-        if dip_threshold > 0:
-            raise HTTPException(400, "回撤阈值应为负数（如 -0.05 表示跌 5%）")
-        if not (0 <= surge_factor <= 1):
-            raise HTTPException(400, "冲高系数需在 0~1（1 = 不干预）")
         conn = store.connect()
         try:
-            store.set_user_plan(conn, code, daily, gate, trend_gate,
-                                dip_threshold, dip_mult, surge_threshold,
-                                surge_factor, sell_pct)
-        finally:
-            conn.close()
-        return {"ok": True, "code": code, "daily": daily, "gate": gate,
+            cur = store.get_user_plan(conn)
+            base = {"code": cur[0], "daily": float(cur[1]),
+                    "gate": float(cur[2]), "trend_gate": float(cur[3]),
+                    "dip_threshold": float(cur[4]), "dip_mult": float(cur[5]),
+                    "surge_threshold": float(cur[6]),
+                    "surge_factor": float(cur[7]),
+                    "sell_pct": float(cur[8])} if cur else {
+                # 首次设置：未传字段用保守默认（不加码/不减码/不卖出）
+                "code": "159941", "daily": None, "gate": 0.05,
+                "trend_gate": 0.0, "dip_threshold": 0.0, "dip_mult": 0.0,
+                "surge_threshold": 1.0, "surge_factor": 1.0, "sell_pct": 0.0}
+            merged = {k: (v if v is not None else base[k]) for k, v in {
+                "code": code, "daily": daily, "gate": gate,
                 "trend_gate": trend_gate, "dip_threshold": dip_threshold,
                 "dip_mult": dip_mult, "surge_threshold": surge_threshold,
-                "surge_factor": surge_factor, "sell_pct": sell_pct}
+                "surge_factor": surge_factor, "sell_pct": sell_pct}.items()}
+
+            if merged["daily"] is None or merged["daily"] <= 0:
+                raise HTTPException(400, "每日金额必须大于 0")
+            if not (0 < merged["gate"] < 1):
+                raise HTTPException(400, "闸门阈值需在 0~1 之间（如 0.05 = 5%）")
+            if merged["trend_gate"] and not (0 < merged["trend_gate"] < 1):
+                raise HTTPException(400, "趋势闸门需在 0~1 之间（0 = 关闭）")
+            if not (0 <= merged["dip_mult"] <= 10):
+                raise HTTPException(400, "加码倍数需在 0~10（0 = 关闭）")
+            if merged["dip_threshold"] > 0:
+                raise HTTPException(400, "回撤阈值应为负数（如 -0.05 表示跌 5%）")
+            if merged["surge_threshold"] < 0:
+                raise HTTPException(400, "冲高阈值不能为负（≥1 表示关闭）")
+            if not (0 <= merged["surge_factor"] <= 1):
+                raise HTTPException(400, "冲高系数需在 0~1（1 = 不干预）")
+            if not (0 <= merged["sell_pct"] <= 1):
+                raise HTTPException(400, "卖出比例需在 0~1（如 0.2 = 卖 20%）")
+
+            store.set_user_plan(conn, merged["code"], merged["daily"],
+                                merged["gate"], merged["trend_gate"],
+                                merged["dip_threshold"], merged["dip_mult"],
+                                merged["surge_threshold"],
+                                merged["surge_factor"], merged["sell_pct"])
+        finally:
+            conn.close()
+        return {"ok": True, **merged}
 
     # ------------------------------------------------ 我的盘（模拟盘/实际盘）
 
