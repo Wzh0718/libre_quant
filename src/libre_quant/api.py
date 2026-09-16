@@ -443,7 +443,8 @@ def create_app(*, with_scheduler: bool = False) -> FastAPI:
                 "gate": float(row[2]), "trend_gate": float(row[3]),
                 "dip_threshold": float(row[4]), "dip_mult": float(row[5]),
                 "surge_threshold": float(row[6]),
-                "surge_factor": float(row[7])}
+                "surge_factor": float(row[7]),
+                "sell_pct": float(row[8])}
 
     @app.get("/api/premium-trend")
     def premium_trend(code: str = "159941") -> dict:
@@ -564,7 +565,8 @@ def create_app(*, with_scheduler: bool = False) -> FastAPI:
                     dip_threshold: float = 0.0,
                     dip_mult: float = 0.0,
                     surge_threshold: float = 1.0,
-                    surge_factor: float = 1.0) -> dict:
+                    surge_factor: float = 1.0,
+                    sell_pct: float = 0.0) -> dict:
         """设置我的定投参数（投多少 / 闸门阈值 / 主目标标的）。"""
         from fastapi import HTTPException
 
@@ -586,13 +588,13 @@ def create_app(*, with_scheduler: bool = False) -> FastAPI:
         try:
             store.set_user_plan(conn, code, daily, gate, trend_gate,
                                 dip_threshold, dip_mult, surge_threshold,
-                                surge_factor)
+                                surge_factor, sell_pct)
         finally:
             conn.close()
         return {"ok": True, "code": code, "daily": daily, "gate": gate,
                 "trend_gate": trend_gate, "dip_threshold": dip_threshold,
                 "dip_mult": dip_mult, "surge_threshold": surge_threshold,
-                "surge_factor": surge_factor}
+                "surge_factor": surge_factor, "sell_pct": sell_pct}
 
     # ------------------------------------------------ 我的盘（模拟盘/实际盘）
 
@@ -828,6 +830,81 @@ def create_app(*, with_scheduler: bool = False) -> FastAPI:
             lv.update({"code": code, "name": _name_of(code),
                        "as_of": str(days[-1])})
             return lv
+        finally:
+            conn.close()
+
+    @app.get("/api/workbench")
+    def workbench(account_id: int | None = None,
+                  code: str = "159941") -> dict:
+        """策略台：价格明细 + 你的真实持仓 + 你的参数 → 今日动作 + 历史结果。"""
+        from libre_quant import store
+        from libre_quant.accounts import Trade
+        from libre_quant.workbench import (
+            price_detail, run_history, today_action,
+        )
+
+        conn = store.connect()
+        try:
+            days, raw, adj, src = store.load_series(conn, code)
+            if not days:
+                return {"code": code, "empty": True,
+                        "note": "库中无数据，请先在标的检索里入库"}
+            prem = store.load_premiums(conn, code)
+            plan = store.get_user_plan(conn)
+            params = {
+                "daily": float(plan[1]) if plan else None,
+                "premium_max": float(plan[2]) if plan else None,
+                "dip_drop": float(plan[4]) if plan else None,
+                "dip_mult": float(plan[5]) if plan else 0.0,
+                "rise_gain": (float(plan[6]) if plan and plan[6] < 1
+                              else None),
+                "sell_pct": float(plan[8]) if plan else 0.0,
+            }
+
+            # ---- 你的真实持仓（从实际盘成交算）
+            hold = {"units": 0.0, "avg_cost": None, "invested": 0.0,
+                    "trades": 0}
+            if account_id is not None:
+                trades = store.account_trades(conn, account_id)
+                units = sum(float(t[3]) for t in trades if t[1] == "buy") \
+                    - sum(float(t[3]) for t in trades if t[1] == "sell")
+                invested = sum(float(t[4]) for t in trades if t[1] == "buy") \
+                    - sum(float(t[4]) for t in trades if t[1] == "sell")
+                hold = {"units": units, "invested": invested,
+                        "avg_cost": (invested / units) if units > 0 else None,
+                        "trades": len(trades)}
+                hold["value"] = units * raw[-1]
+                hold["profit"] = hold["value"] - invested
+                hold["profit_pct"] = ((hold["value"] / invested - 1)
+                                      if invested else None)
+
+            pd = price_detail(days, raw, adj)
+            action = today_action(
+                price=raw[-1], units=hold["units"], avg_cost=hold["avg_cost"],
+                cash=None, daily=params["daily"],
+                dip_drop=params["dip_drop"], dip_mult=params["dip_mult"],
+                rise_gain=params["rise_gain"], sell_pct=params["sell_pct"],
+                premium=prem.get(days[-1]),
+                premium_max=params["premium_max"],
+                change_7d=pd.get("change_7d"))
+
+            hist = None
+            if params["daily"]:
+                h = run_history(days, adj, daily=params["daily"],
+                                dip_drop=params["dip_drop"],
+                                dip_mult=params["dip_mult"],
+                                rise_gain=params["rise_gain"],
+                                sell_pct=params["sell_pct"],
+                                premium_max=params["premium_max"], prem=prem)
+                step = max(1, len(h["curve"]) // 500)
+                hist = {**{k: v for k, v in h.items() if k != "rows"},
+                        "curve": h["curve"][::step],
+                        "curve_days": [str(d) for d in days][::step],
+                        "rows": h["rows"][-30:]}
+            return {"code": code, "name": _name_of(code),
+                    "price": pd, "hold": hold, "params": params,
+                    "action": action, "history": hist,
+                    "plan_configured": plan is not None}
         finally:
             conn.close()
 

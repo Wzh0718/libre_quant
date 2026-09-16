@@ -550,3 +550,104 @@ export interface PremiumTrend {
 
 export const fetchPremiumTrend = (code: string) =>
   getJson<PremiumTrend>(`/api/premium-trend?code=${code}`);
+
+// ---------------------------------------------------------------- 策略台
+
+export interface PricePathRow { day: string; close: number; change: number | null }
+
+export interface PriceDetail {
+  today: number;
+  today_day: string;
+  yesterday?: number;
+  yesterday_day?: string;
+  change_1d?: number;
+  change_7d: number | null;
+  change_14d: number | null;
+  path_7?: PricePathRow[];
+  path_14?: PricePathRow[];
+}
+
+export interface HoldInfo {
+  units: number;
+  invested: number;
+  avg_cost: number | null;
+  trades: number;
+  value?: number;
+  profit?: number;
+  profit_pct?: number | null;
+}
+
+export interface WorkbenchAction {
+  action: string;
+  amount: number;
+  shares: number;
+  reasons: string[];
+}
+
+export interface HistoryResult {
+  invested: number;
+  value: number;
+  profit: number;
+  profit_pct: number | null;
+  max_dd: number;
+  buys: number;
+  sells: number;
+  skips: number;
+  units: number;
+  curve: number[];
+  curve_days: string[];
+  rows: { day: string; price: number; action: string; amount: number }[];
+}
+
+export interface WorkbenchData {
+  code: string;
+  name: string;
+  price: PriceDetail;
+  hold: HoldInfo;
+  params: {
+    daily: number | null;
+    premium_max: number | null;
+    dip_drop: number | null;
+    dip_mult: number;
+    rise_gain: number | null;
+    sell_pct: number;
+  };
+  action: WorkbenchAction;
+  history: HistoryResult | null;
+  plan_configured: boolean;
+  empty?: boolean;
+  note?: string;
+}
+
+export const fetchWorkbench = (code: string, accountId?: number | null) => {
+  const p = new URLSearchParams({ code });
+  if (accountId != null) p.set("account_id", String(accountId));
+  return getJson<WorkbenchData>(`/api/workbench?${p}`);
+};
+
+export interface SimpleParams {
+  daily: number;
+  premium_max: number;
+  dip_drop: number;
+  dip_mult: number;
+  rise_gain: number;
+  sell_pct: number;
+}
+
+export async function saveSimpleParams(code: string, s: SimpleParams): Promise<void> {
+  const p = new URLSearchParams({
+    code,
+    daily: String(s.daily),
+    gate: String(s.premium_max),
+    dip_threshold: String(s.dip_drop),
+    dip_mult: String(s.dip_mult),
+    surge_threshold: String(s.rise_gain),
+    surge_factor: "1",
+    sell_pct: String(s.sell_pct),
+  });
+  const r = await fetch(`/api/my-plan?${p}`, { method: "PUT" });
+  if (!r.ok) {
+    const body = await r.json().catch(() => null);
+    throw new Error(errText(body, r.status));
+  }
+}

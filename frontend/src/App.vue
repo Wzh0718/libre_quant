@@ -17,12 +17,11 @@ watch(selectedCode, (c) => {
 });
 
 const NAV = [
-  { to: "/today", label: "今日决策" },
-  { to: "/analysis", label: "深度分析" },
-  { to: "/replay", label: "复盘模拟" },
-  { to: "/review", label: "历史复盘" },
-  { to: "/shadow", label: "影子盘" },
+  { to: "/workbench", label: "策略台" },
   { to: "/accounts", label: "我的盘" },
+  { to: "/today", label: "今日决策" },
+  { to: "/analysis", label: "分析" },
+  { to: "/review", label: "历史复盘" },
 ];
 
 // ---- 标的检索（输入基金/股票代码 → 拉历史 → 跑盘）

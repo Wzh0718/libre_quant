@@ -5,11 +5,14 @@ import ReplayPage from "./pages/ReplayPage.vue";
 import ReviewPage from "./pages/ReviewPage.vue";
 import ShadowPage from "./pages/ShadowPage.vue";
 import AccountsPage from "./pages/AccountsPage.vue";
+import WorkbenchPage from "./pages/WorkbenchPage.vue";
 
 export const router = createRouter({
   history: createWebHistory(),
   routes: [
-    { path: "/", redirect: "/today" },
+    { path: "/", redirect: "/workbench" },
+    { path: "/workbench", name: "workbench", component: WorkbenchPage,
+      meta: { title: "策略台" } },
     { path: "/today", name: "today", component: TodayPage,
       meta: { title: "今日决策" } },
     { path: "/analysis", name: "analysis", component: AnalysisPage,

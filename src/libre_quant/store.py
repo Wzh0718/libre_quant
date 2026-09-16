@@ -455,6 +455,8 @@ def migrate_schema(conn) -> None:
                     "surge_threshold DOUBLE PRECISION NOT NULL DEFAULT 0")
         cur.execute("ALTER TABLE user_plan ADD COLUMN IF NOT EXISTS "
                     "surge_factor DOUBLE PRECISION NOT NULL DEFAULT 1")
+        cur.execute("ALTER TABLE user_plan ADD COLUMN IF NOT EXISTS "
+                    "sell_pct DOUBLE PRECISION NOT NULL DEFAULT 0")
     conn.commit()
 
 
@@ -467,7 +469,7 @@ def get_user_plan(conn):
     """
     with conn.cursor() as cur:
         cur.execute("SELECT code, daily, gate, trend_gate, dip_threshold, "
-                    "dip_mult, surge_threshold, surge_factor "
+                    "dip_mult, surge_threshold, surge_factor, sell_pct "
                     "FROM user_plan WHERE id = 1")
         return cur.fetchone()
 
@@ -475,20 +477,21 @@ def get_user_plan(conn):
 def set_user_plan(conn, code: str, daily: float, gate: float,
                   trend_gate: float = 0.0, dip_threshold: float = 0.0,
                   dip_mult: float = 0.0, surge_threshold: float = 1.0,
-                  surge_factor: float = 1.0) -> None:
+                  surge_factor: float = 1.0, sell_pct: float = 0.0) -> None:
     """**价格驱动的投放规则**（都是本 ETF 的场内价格）：
 
-    * dip_threshold/dip_mult：7 日跌幅 ≥ |阈值| → 加投 ``daily×mult``；
-    * surge_threshold/surge_factor：7 日涨幅 ≥ 阈值 → 当日金额乘 ``factor``
-      （0 = 暂停，0.5 = 减半，1 = 不干预）。
+    * gate：溢价超过该值 → 不买；
+    * dip_threshold/dip_mult：近 7 天跌幅 ≥ |阈值| → 多买 ``daily×mult``；
+    * surge_threshold/sell_pct：近 7 天涨幅 ≥ 阈值 → 卖出持仓的 ``sell_pct``；
+    * surge_factor：涨幅达标时当日买入金额乘该系数（1 = 不干预）。
     """
     with conn.cursor() as cur:
         cur.execute(
             """
             INSERT INTO user_plan (id, code, daily, gate, trend_gate,
                                    dip_threshold, dip_mult,
-                                   surge_threshold, surge_factor)
-            VALUES (1, %s, %s, %s, %s, %s, %s, %s, %s)
+                                   surge_threshold, surge_factor, sell_pct)
+            VALUES (1, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (id) DO UPDATE SET
                 code = EXCLUDED.code, daily = EXCLUDED.daily,
                 gate = EXCLUDED.gate, trend_gate = EXCLUDED.trend_gate,
@@ -496,10 +499,11 @@ def set_user_plan(conn, code: str, daily: float, gate: float,
                 dip_mult = EXCLUDED.dip_mult,
                 surge_threshold = EXCLUDED.surge_threshold,
                 surge_factor = EXCLUDED.surge_factor,
+                sell_pct = EXCLUDED.sell_pct,
                 updated_at = now()
             """,
             (code, daily, gate, trend_gate, dip_threshold, dip_mult,
-             surge_threshold, surge_factor))
+             surge_threshold, surge_factor, sell_pct))
     conn.commit()
 
 
