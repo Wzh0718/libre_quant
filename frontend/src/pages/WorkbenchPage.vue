@@ -42,8 +42,8 @@ async function load() {
     if (accountId.value == null && accounts.value.length)
       accountId.value = accounts.value[0].id;
     data.value = await fetchWorkbench(selectedCode.value, accountId.value);
-    if (!data.value.plan_configured) fillForm(data.value);
-    else fillForm(data.value);
+    // 空数据响应没有 params 字段，fillForm 会抛 TypeError（空态提示永不可达）
+    if (!data.value.empty) fillForm(data.value);
   } catch (e) {
     err.value = e instanceof Error ? e.message : String(e);
   } finally {

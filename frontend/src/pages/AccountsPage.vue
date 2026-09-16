@@ -50,7 +50,6 @@ async function open() {
       start_day: form.value.start_day || undefined,
       daily: form.value.daily,
       gate: form.value.gate / 100,
-      name: form.value.name || undefined,
     });
     msg.value = `已开盘 #${r.id}（${form.value.kind === "paper" ? "模拟盘" : "实际盘"}）`;
     await load();

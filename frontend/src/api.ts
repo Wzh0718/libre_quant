@@ -66,6 +66,9 @@ export interface TrailRow {
 export interface TodayCard {
   code: string;
   name: string;
+  /** 库中无数据时后端返回 {code,name,empty:true,reason}，无以下字段 */
+  empty?: boolean;
+  reason?: string;
   day: string;
   close: number;
   premium: number | null;
@@ -430,7 +433,11 @@ export async function addTrade(aid: number, q: {
 }
 
 export async function deleteAccount(aid: number): Promise<void> {
-  await fetch(`/api/accounts/${aid}`, { method: "DELETE" });
+  const r = await fetch(`/api/accounts/${aid}`, { method: "DELETE" });
+  if (!r.ok) {
+    const body = await r.json().catch(() => null);
+    throw new Error(errText(body, r.status));
+  }
 }
 
 export const fetchOutlook = (aid: number, n = 3) =>

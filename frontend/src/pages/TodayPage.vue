@@ -99,6 +99,9 @@ watch(selectedCode, load);
   <div v-else-if="error" class="state-block" role="alert">
     加载失败：{{ error }} <button class="badge badge-hold" style="cursor:pointer" @click="load">重试</button>
   </div>
+  <div v-else-if="data?.empty" class="state-block">
+    {{ data.code }}：{{ data.reason ?? "库中无数据" }}——请先在「标的检索」入库该标的。
+  </div>
   <template v-else-if="data">
     <h2>我的定投参数（你自己填，系统不替你决定）</h2>
     <div class="card">
@@ -266,7 +269,7 @@ watch(selectedCode, load);
               <td class="num">{{ fmtPct(r.premium_then) }}</td>
               <td class="num"
                   :style="(r.premium_change ?? 0) >= 0 ? 'color:var(--red)' : 'color:var(--green)'">
-                {{ r.premium_change != null && r.premium_change >= 0 ? "+" : "" }}{{ fmtPct(r.premium_change) }}
+                {{ fmtPct(r.premium_change) }}
                 <span class="muted" style="font-size:11px">（升=拥挤加剧）</span>
               </td>
               <td class="num">{{ r.price_then != null ? r.price_then.toFixed(3) : "—" }}</td>
