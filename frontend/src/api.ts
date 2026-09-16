@@ -718,3 +718,193 @@ export async function triggerRefresh(): Promise<{ started: boolean }> {
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
   return r.json();
 }
+
+// ---------------------------------------------------------------- 作战闭环（①②③④）
+
+export interface BattleParams {
+  daily: number | null;
+  premium_max: number | null;
+  dip_drop: number | null;
+  dip_mult: number | null;
+  rise_gain: number | null;
+  sell_pct: number | null;
+  vol_target?: number | null;
+}
+
+export interface BattleRow {
+  day: string;
+  weekday: string;
+  ref_price: number | null;
+  band?: [number, number];
+  dip?: { trigger: number; amount: number; shares_est: number };
+  sell?: { trigger: number; qty: number | null; pct: number; amount_est: number | null };
+  base?: { amount: number; shares_est: number };
+}
+
+export interface BattleSituation {
+  day: string;
+  close: number;
+  change_1d?: number;
+  change_7d?: number;
+  change_14d?: number;
+  ma: Record<string, { value: number; dist: number }>;
+  vol_ann: number | null;
+  drawdown_from_high?: number;
+  high_252?: number;
+  premium?: number | null;
+  tags: string[];
+}
+
+export interface BattleHistory {
+  invested: number;
+  value: number;
+  profit: number;
+  profit_pct: number | null;
+  max_dd: number;
+  buys: number;
+  sells: number;
+  skips: number;
+  curve: number[];
+  curve_days: string[];
+}
+
+export interface BattleData {
+  code: string;
+  name: string;
+  as_of: string;
+  horizon: number;
+  params: BattleParams;
+  params_label: string;
+  vol_ann: number | null;
+  vol_scale: number;
+  current_premium: number | null;
+  position: { units: number; avg_cost: number | null };
+  rules: string[];
+  rows: BattleRow[];
+  situation: BattleSituation;
+  history: BattleHistory | null;
+  disclaimer: string;
+}
+
+export const fetchBattle = (code: string, q: {
+  accountId?: number | null; strategyId?: number | null; horizon?: number;
+} = {}) => {
+  const p = new URLSearchParams({ code });
+  if (q.accountId != null) p.set("account_id", String(q.accountId));
+  if (q.strategyId != null) p.set("strategy_id", String(q.strategyId));
+  if (q.horizon) p.set("horizon", String(q.horizon));
+  return getJson<BattleData>(`/api/battle?${p}`);
+};
+
+export async function saveBattlePlan(q: {
+  code: string; accountId: number; strategyId?: number | null;
+  params?: Partial<BattleParams>; horizon?: number;
+}): Promise<{ plan_id: number; as_of: string }> {
+  const r = await fetch("/api/battle/save", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      code: q.code, account_id: q.accountId, strategy_id: q.strategyId,
+      params: q.params, horizon: q.horizon,
+    }),
+  });
+  const body = await r.json().catch(() => null);
+  if (!r.ok) throw new Error(errText(body, r.status));
+  return body;
+}
+
+export interface TrackingRow {
+  day: string;
+  status: "ok" | "missed" | "deviated" | "pending";
+  close?: number;
+  planned?: string;
+  planned_amount?: number;
+  actual_amount?: number;
+  dip_hit?: boolean;
+  rise_hit?: boolean;
+  gated?: boolean;
+  note?: string;
+}
+
+export interface TrackingData {
+  empty?: boolean;
+  note?: string;
+  plan_id?: number;
+  code?: string;
+  name?: string;
+  as_of?: string;
+  params?: BattleParams;
+  evaluated?: number;
+  consistent?: number;
+  adherence?: number | null;
+  rows?: TrackingRow[];
+  hints?: string[];
+}
+
+export const fetchTracking = (accountId: number) =>
+  getJson<TrackingData>(`/api/battle/tracking?account_id=${accountId}`);
+
+// ---------------------------------------------------------------- 复盘 / 策略库（⑤）
+
+export interface ReviewRunResult extends BattleHistory {
+  code: string;
+  name: string;
+}
+
+export async function runReview(code: string, params: Partial<BattleParams>):
+    Promise<ReviewRunResult> {
+  const r = await fetch("/api/review/run", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ code, params }),
+  });
+  const body = await r.json().catch(() => null);
+  if (!r.ok) throw new Error(errText(body, r.status));
+  return body;
+}
+
+export interface StrategyRow {
+  id: number;
+  code: string;
+  name: string;
+  params: BattleParams;
+  params_label: string;
+  note: string;
+  parent_id: number | null;
+  created_at: string;
+  backtest?: ReviewRunResult | null;
+}
+
+export const fetchStrategies = (code?: string) =>
+  getJson<{ items: StrategyRow[] }>(
+    `/api/strategies${code ? `?code=${code}` : ""}`);
+
+export async function createStrategy(q: {
+  code: string; name: string; params: Partial<BattleParams>;
+  note?: string; parentId?: number | null;
+}): Promise<{ id: number }> {
+  const r = await fetch("/api/strategies", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      code: q.code, name: q.name, params: q.params,
+      note: q.note ?? "", parent_id: q.parentId ?? null,
+    }),
+  });
+  const body = await r.json().catch(() => null);
+  if (!r.ok) throw new Error(errText(body, r.status));
+  return body;
+}
+
+export async function deleteStrategy(sid: number): Promise<void> {
+  const r = await fetch(`/api/strategies/${sid}`, { method: "DELETE" });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+}
+
+export async function compareStrategies(ids: number[]):
+    Promise<{ items: StrategyRow[] }> {
+  const r = await fetch("/api/strategies/compare", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ids }),
+  });
+  const body = await r.json().catch(() => null);
+  if (!r.ok) throw new Error(errText(body, r.status));
+  return body;
+}

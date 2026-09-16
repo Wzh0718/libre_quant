@@ -2,8 +2,9 @@
 import { onMounted, ref } from "vue";
 import {
   addTrade, createAccount, deleteAccount, fetchAccounts, fetchAttribution,
-  fetchOutlook, fetchPlans, fmtPct, fmtYuan,
+  fetchOutlook, fetchPlans, fetchTracking, fmtPct, fmtYuan,
   type AccountRow, type AttributionData, type OutlookData, type PlanItem,
+  type TrackingData,
 } from "../api";
 import { assets, refreshAssets } from "../store";
 
@@ -28,6 +29,10 @@ const outlookFor = ref<number | null>(null);
 // ---- 当日红绿归因
 const attrib = ref<AttributionData | null>(null);
 const attribFor = ref<number | null>(null);
+
+// ---- 计划 vs 实际（作战方案反哺）
+const tracking = ref<TrackingData | null>(null);
+const trackingFor = ref<number | null>(null);
 
 const rows = ref<AccountRow[]>([]);
 
@@ -111,7 +116,19 @@ async function remove(aid: number) {
   await deleteAccount(aid);
   if (outlookFor.value === aid) { outlook.value = null; outlookFor.value = null; }
   if (attribFor.value === aid) { attrib.value = null; attribFor.value = null; }
+  if (trackingFor.value === aid) { tracking.value = null; trackingFor.value = null; }
   await load();
+}
+
+async function showTracking(aid: number) {
+  trackingFor.value = trackingFor.value === aid ? null : aid;
+  tracking.value = null;
+  if (trackingFor.value === null) return;
+  try {
+    tracking.value = await fetchTracking(aid);
+  } catch (e) {
+    err.value = e instanceof Error ? e.message : String(e);
+  }
 }
 
 onMounted(async () => { await refreshAssets(); await load(); });
@@ -213,9 +230,15 @@ onMounted(async () => { await refreshAssets(); await load(); });
         <div class="muted num" style="font-size:12px">
           XIRR {{ fmtPct(a.xirr ?? null) }} · {{ a.trades ?? 0 }} 笔成交</div></div>
     </div>
-    <div style="margin-top:12px;display:flex;gap:8px">
+    <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
       <button class="badge badge-hold" style="cursor:pointer" @click="showOutlook(a.id)">
         未来 3 天预案
+      </button>
+      <button v-if="a.kind === 'real'"
+        class="badge"
+        :class="trackingFor === a.id ? 'badge-buy' : 'badge-hold'"
+        style="cursor:pointer" @click="showTracking(a.id)">
+        {{ trackingFor === a.id ? "收起对照" : "计划 vs 实际" }}
       </button>
       <button
         class="badge"
@@ -224,6 +247,55 @@ onMounted(async () => { await refreshAssets(); await load(); });
         {{ attribFor === a.id ? "收起归因" : "为什么红/绿" }}
       </button>
       <button class="badge badge-pause" style="cursor:pointer" @click="remove(a.id)">删除</button>
+    </div>
+
+    <!-- 计划 vs 实际：作战方案执行情况 + 反哺建议 -->
+    <div v-if="trackingFor === a.id && tracking" style="margin-top:12px">
+      <div v-if="tracking.empty" class="muted" style="font-size:13px">
+        {{ tracking.note }} —— 去<router-link to="/battle">作战台</router-link>生成并落盘。
+      </div>
+      <template v-else>
+        <div class="muted" style="font-size:12px">
+          方案 #{{ tracking.plan_id }}（{{ tracking.as_of }} 落盘）·
+          已对照 {{ tracking.evaluated }} 天 ·
+          执行一致率
+          <b :style="(tracking.adherence ?? 0) >= 0.6 ? 'color:var(--green)' : 'color:var(--red)'">
+            {{ tracking.adherence != null ? (tracking.adherence * 100).toFixed(0) + "%" : "—" }}
+          </b>
+        </div>
+        <table style="margin-top:8px">
+          <thead><tr>
+            <th>日期</th><th>计划</th><th>计划金额</th><th>实际金额</th><th>结果</th>
+          </tr></thead>
+          <tbody>
+            <tr v-for="r in (tracking.rows ?? [])" :key="r.day">
+              <td class="num">{{ r.day }}</td>
+              <td>
+                <span v-if="r.planned === '买入' || r.planned === '多买'"
+                      class="badge badge-buy">{{ r.planned }}</span>
+                <span v-else-if="r.planned === '卖出'" class="badge badge-pause">卖出</span>
+                <span v-else class="badge badge-hold">{{ r.planned ?? "—" }}</span>
+              </td>
+              <td class="num">{{ r.planned_amount ? fmtYuan(r.planned_amount) : "—" }}</td>
+              <td class="num">{{ r.status === "pending" ? "—" : fmtYuan(r.actual_amount ?? 0) }}</td>
+              <td>
+                <span v-if="r.status === 'ok'" style="color:var(--green)">一致</span>
+                <span v-else-if="r.status === 'missed'" style="color:var(--red)">未执行</span>
+                <span v-else-if="r.status === 'deviated'" style="color:var(--amber)">偏离</span>
+                <span v-else class="muted">未到</span>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        <div v-if="tracking.hints?.length" class="card" style="margin-top:8px;
+                 border-color:var(--amber)">
+          <strong style="font-size:13px">反哺建议（拿去复盘页调参重跑）</strong>
+          <ul style="margin:6px 0 0 0;padding-left:18px">
+            <li v-for="(h, i) in tracking.hints" :key="i"
+                class="muted" style="font-size:13px">{{ h }}</li>
+          </ul>
+        </div>
+      </template>
     </div>
 
     <div v-if="attribFor === a.id && attrib" style="margin-top:12px">

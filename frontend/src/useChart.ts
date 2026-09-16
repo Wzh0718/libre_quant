@@ -26,6 +26,7 @@ export const CHART_COLORS = {
   blue: "#58a6ff",
   green: "#3fb950",
   red: "#f85149",
+  amber: "#d29922",
   muted: "#8b949e",
   border: "#30363d",
   text: "#e6edf3",

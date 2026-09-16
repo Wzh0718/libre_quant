@@ -146,6 +146,29 @@ CREATE TABLE IF NOT EXISTS user_plan (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 COMMENT ON TABLE user_plan IS '用户自己的定投参数（单行）：投多少、闸门阈值、主目标标的。系统不得自行发明金额';
+
+CREATE TABLE IF NOT EXISTS strategy (
+    id         SERIAL PRIMARY KEY,
+    code       TEXT NOT NULL,
+    name       TEXT NOT NULL,
+    params     JSONB NOT NULL,
+    note       TEXT NOT NULL DEFAULT '',
+    parent_id  INTEGER,                 -- 基于哪个版本改的（调参血缘）
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+COMMENT ON TABLE strategy IS '策略库：一组作战参数的版本快照（作战方案与复盘共用同一 params 形状）';
+
+CREATE TABLE IF NOT EXISTS battle_plan (
+    id         SERIAL PRIMARY KEY,
+    account_id INTEGER REFERENCES account(id) ON DELETE CASCADE,
+    code       TEXT NOT NULL,
+    as_of      DATE NOT NULL,           -- 生成时的数据截止日
+    horizon    INTEGER NOT NULL DEFAULT 5,
+    params     JSONB NOT NULL,
+    plan       JSONB NOT NULL,          -- battle.weekly_plan 的完整输出
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+COMMENT ON TABLE battle_plan IS '作战方案落盘：用于事后 plan_vs_actual 对照（计划 vs 实际成交）';
 """
 
 
@@ -567,6 +590,81 @@ def account_trades(conn, account_id: int) -> list[tuple]:
             "SELECT day, action, price, qty, amount, fee, note "
             "FROM account_trade WHERE account_id = %s ORDER BY day, id",
             (account_id,))
+        return cur.fetchall()
+
+
+# ---------------------------------------------------------------- 策略库 / 作战方案
+
+def strategy_save(conn, code: str, name: str, params: dict,
+                  note: str = "", parent_id: int | None = None) -> int:
+    import json as _json
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO strategy (code, name, params, note, parent_id) "
+            "VALUES (%s, %s, %s, %s, %s) RETURNING id",
+            (code, name, _json.dumps(params), note, parent_id))
+        sid = cur.fetchone()[0]
+    conn.commit()
+    return sid
+
+
+def strategy_list(conn, code: str | None = None) -> list[tuple]:
+    with conn.cursor() as cur:
+        if code:
+            cur.execute(
+                "SELECT id, code, name, params, note, parent_id, created_at "
+                "FROM strategy WHERE code = %s ORDER BY id DESC", (code,))
+        else:
+            cur.execute(
+                "SELECT id, code, name, params, note, parent_id, created_at "
+                "FROM strategy ORDER BY id DESC")
+        return cur.fetchall()
+
+
+def strategy_get(conn, sid: int):
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT id, code, name, params, note, parent_id, created_at "
+            "FROM strategy WHERE id = %s", (sid,))
+        return cur.fetchone()
+
+
+def strategy_delete(conn, sid: int) -> None:
+    with conn.cursor() as cur:
+        cur.execute("DELETE FROM strategy WHERE id = %s", (sid,))
+    conn.commit()
+
+
+def battle_plan_save(conn, account_id: int | None, code: str, as_of: date,
+                     horizon: int, params: dict, plan: dict) -> int:
+    import json as _json
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO battle_plan (account_id, code, as_of, horizon, params, plan) "
+            "VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
+            (account_id, code, as_of, horizon,
+             _json.dumps(params), _json.dumps(plan)))
+        pid = cur.fetchone()[0]
+    conn.commit()
+    return pid
+
+
+def battle_plan_latest(conn, account_id: int):
+    """该实际盘最新一份作战方案（id, code, as_of, horizon, params, plan, created_at）。"""
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT id, code, as_of, horizon, params, plan, created_at "
+            "FROM battle_plan WHERE account_id = %s ORDER BY id DESC LIMIT 1",
+            (account_id,))
+        return cur.fetchone()
+
+
+def battle_plan_list(conn, account_id: int, limit: int = 10) -> list[tuple]:
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT id, as_of, horizon, params, created_at "
+            "FROM battle_plan WHERE account_id = %s ORDER BY id DESC LIMIT %s",
+            (account_id, limit))
         return cur.fetchall()
 
 

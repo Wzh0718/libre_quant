@@ -13,7 +13,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import Body, FastAPI
 
 from libre_quant.config import PROJECT_ROOT
 
@@ -1027,6 +1027,310 @@ def create_app(*, with_scheduler: bool = False) -> FastAPI:
                     "price": pd, "hold": hold, "params": params,
                     "action": action, "history": hist,
                     "plan_configured": plan is not None}
+        finally:
+            conn.close()
+
+    # ---------------------------------------------------------- 作战闭环（①②③④）
+
+    def _resolve_battle_params(conn, code: str, strategy_id: int | None,
+                               inline: dict) -> dict:
+        """作战参数解析顺序：strategy_id → 内联参数 → user_plan（沿用策略台口径）。"""
+        from fastapi import HTTPException
+
+        from libre_quant import store as _s
+        if strategy_id is not None:
+            row = _s.strategy_get(conn, strategy_id)
+            if not row:
+                raise HTTPException(404, f"策略版本 #{strategy_id} 不存在")
+            return dict(row[3])
+        if any(v is not None for v in inline.values()):
+            return {k: v for k, v in inline.items() if v is not None}
+        plan = _s.get_user_plan(conn)
+        if plan:
+            return {
+                "daily": float(plan[1]),
+                "premium_max": float(plan[2]),
+                "dip_drop": float(plan[4]) or None,
+                "dip_mult": float(plan[5]) or None,
+                "rise_gain": (float(plan[6]) if plan[6] < 1 else None),
+                "sell_pct": float(plan[8]) or None,
+            }
+        raise HTTPException(
+            400, "还没有作战参数：填查询参数、传 strategy_id，"
+                 "或先在复盘页保存一套参数")
+
+    def _real_position(conn, account_id: int, days, raw):
+        """实际盘当前持仓（估值内核口径）；无账户/无成交返回零仓。"""
+        from libre_quant import store as _s
+        from libre_quant.accounts import Trade, value_trades
+
+        row = _s.get_account(conn, account_id)
+        if not row:
+            return None
+        trades = [Trade(day=d, action=a, price=float(p_), qty=float(q),
+                        amount=float(am), fee=float(f), note=nt or "")
+                  for d, a, p_, q, am, f, nt in _s.account_trades(conn, account_id)]
+        v = value_trades(trades, dict(zip(days, raw)), days[-1])
+        return {"units": v["units"], "avg_cost": v["avg_cost"],
+                "value": v["holdings"], "invested": v["invested"],
+                "profit_pct": v["pnl_pct"]}
+
+    def _run_battle(conn, code: str, params: dict, account_id: int | None,
+                    horizon: int) -> dict:
+        """作战方案 = weekly_plan（规则触发单）+ run_history（同参数历史表现）。"""
+        from fastapi import HTTPException
+
+        from libre_quant import store as _s
+        from libre_quant.battle import situation, weekly_plan
+        from libre_quant.workbench import run_history
+
+        days, raw, adj, src = _s.load_series(conn, code)
+        if not days:
+            raise HTTPException(400, f"{code} 库中无数据，请先检索入库")
+        prem = _s.load_premiums(conn, code)
+        position = _real_position(conn, account_id, days, raw) \
+            if account_id is not None else None
+        plan = weekly_plan(days=days, closes=raw, adj=adj, prem=prem or None,
+                           position=position, params=params, horizon=horizon)
+        hist = None
+        if plan["params"].get("daily"):
+            from libre_quant.config import get_settings
+            s_fee = get_settings()
+            pp = plan["params"]
+            h = run_history(days, adj, daily=pp["daily"],
+                            dip_drop=pp.get("dip_drop"),
+                            dip_mult=pp.get("dip_mult") or 0.0,
+                            rise_gain=pp.get("rise_gain"),
+                            sell_pct=pp.get("sell_pct") or 0.0,
+                            premium_max=pp.get("premium_max"), prem=prem,
+                            fee_rate=s_fee.trading_fee_rate,
+                            fee_min=s_fee.trading_fee_min)
+            step = max(1, len(h["curve"]) // 500)
+            hist = {**{k: v for k, v in h.items() if k not in ("rows", "curve")},
+                    "curve": h["curve"][::step],
+                    "curve_days": [str(d) for d in days][::step]}
+        return {"code": code, "name": _name_of(code),
+                "situation": situation(days, raw, adj, prem or None),
+                "history": hist, **plan}
+
+    @app.get("/api/battle")
+    def battle(code: str, account_id: int | None = None,
+               strategy_id: int | None = None, horizon: int = 5,
+               daily: float | None = None, premium_max: float | None = None,
+               dip_drop: float | None = None, dip_mult: float | None = None,
+               rise_gain: float | None = None, sell_pct: float | None = None,
+               vol_target: float | None = None) -> dict:
+        """③ 作战方案：未来一周「什么价位买多少 / 卖多少」+ 同参数历史表现。"""
+        from libre_quant import store
+
+        conn = store.connect()
+        try:
+            params = _resolve_battle_params(conn, code, strategy_id, {
+                "daily": daily, "premium_max": premium_max,
+                "dip_drop": dip_drop, "dip_mult": dip_mult,
+                "rise_gain": rise_gain, "sell_pct": sell_pct,
+                "vol_target": vol_target})
+            return _run_battle(conn, code, params, account_id, horizon)
+        finally:
+            conn.close()
+
+    @app.post("/api/battle/save")
+    def battle_save(payload: dict = Body(...)) -> dict:
+        """把当前作战方案落盘（绑定实际盘），供事后「计划 vs 实际」对照。"""
+        from datetime import date as _date
+
+        from fastapi import Body, HTTPException
+
+        from libre_quant import store
+
+        code = str(payload.get("code") or "")
+        account_id = payload.get("account_id")
+        horizon = int(payload.get("horizon") or 5)
+        if not code or account_id is None:
+            raise HTTPException(400, "需要 code 和 account_id")
+        conn = store.connect()
+        try:
+            params = _resolve_battle_params(
+                conn, code, payload.get("strategy_id"),
+                dict(payload.get("params") or {}))
+            out = _run_battle(conn, code, params, int(account_id), horizon)
+            pid = store.battle_plan_save(
+                conn, int(account_id), code,
+                _date.fromisoformat(out["as_of"]), horizon,
+                out["params"], {k: out[k] for k in ("params", "rules", "rows",
+                                                    "as_of", "horizon")})
+            return {"ok": True, "plan_id": pid, "as_of": out["as_of"]}
+        finally:
+            conn.close()
+
+    @app.get("/api/battle/tracking")
+    def battle_tracking(account_id: int) -> dict:
+        """④ 计划 vs 实际：最新作战方案 × 真实价格 × 真实成交 → 反哺建议。"""
+        from fastapi import HTTPException
+
+        from libre_quant import store
+        from libre_quant.battle import plan_vs_actual
+
+        conn = store.connect()
+        try:
+            acc = store.get_account(conn, account_id)
+            if not acc:
+                raise HTTPException(404, "账户不存在")
+            latest = store.battle_plan_latest(conn, account_id)
+            if not latest:
+                return {"empty": True,
+                        "note": "还没有落盘的作战方案 —— 先在作战台「落盘为方案」"}
+            pid, code, as_of, horizon, params, plan, created = latest
+            days, raw, _adj, _src = store.load_series(conn, code)
+            closes = {d: c for d, c in zip(days, raw) if d > as_of}
+            prem = {d: v for d, v in store.load_premiums(conn, code).items()
+                    if d > as_of}
+            trades = [{"day": d, "action": a, "amount": float(am)}
+                      for d, a, _p, _q, am, _f, _n
+                      in store.account_trades(conn, account_id)
+                      if d > as_of]
+            result = plan_vs_actual(plan, closes=closes, trades=trades,
+                                    prem=prem or None)
+            return {"plan_id": pid, "code": code, "name": _name_of(code),
+                    "as_of": str(as_of), "created_at": str(created),
+                    "params": params, "plan_rows": plan.get("rows", []),
+                    **result}
+        finally:
+            conn.close()
+
+    @app.post("/api/review/run")
+    def review_run(payload: dict = Body(...)) -> dict:
+        """② 复盘调参：任意参数跑全历史（不落盘），返回指标 + 曲线。"""
+        from fastapi import Body, HTTPException
+
+        from libre_quant import store
+        from libre_quant.workbench import run_history
+
+        code = str(payload.get("code") or "")
+        params = dict(payload.get("params") or {})
+        if not code or not params.get("daily"):
+            raise HTTPException(400, "需要 code 且 params.daily > 0")
+        conn = store.connect()
+        try:
+            days, _raw, adj, _src = store.load_series(conn, code)
+            if not days:
+                raise HTTPException(400, f"{code} 库中无数据，请先检索入库")
+            prem = store.load_premiums(conn, code)
+            from libre_quant.config import get_settings
+            s_fee = get_settings()
+            h = run_history(days, adj, daily=float(params["daily"]),
+                            dip_drop=params.get("dip_drop"),
+                            dip_mult=float(params.get("dip_mult") or 0.0),
+                            rise_gain=params.get("rise_gain"),
+                            sell_pct=float(params.get("sell_pct") or 0.0),
+                            premium_max=params.get("premium_max"), prem=prem,
+                            fee_rate=s_fee.trading_fee_rate,
+                            fee_min=s_fee.trading_fee_min)
+            step = max(1, len(h["curve"]) // 500)
+            return {"code": code, "name": _name_of(code),
+                    **{k: v for k, v in h.items() if k not in ("rows", "curve")},
+                    "curve": h["curve"][::step],
+                    "curve_days": [str(d) for d in days][::step]}
+        finally:
+            conn.close()
+
+    # ---------------------------------------------------------- 策略库（⑤）
+
+    def _strategy_json(row) -> dict:
+        from libre_quant.battle import params_label, norm_params
+        sid, code, name, params, note, parent_id, created = row
+        p = norm_params(dict(params))
+        return {"id": sid, "code": code, "name": name, "params": p,
+                "params_label": params_label(p), "note": note,
+                "parent_id": parent_id, "created_at": str(created)}
+
+    @app.get("/api/strategies")
+    def strategies(code: str | None = None) -> dict:
+        from libre_quant import store
+        conn = store.connect()
+        try:
+            return {"items": [_strategy_json(r)
+                              for r in store.strategy_list(conn, code)]}
+        finally:
+            conn.close()
+
+    @app.post("/api/strategies")
+    def strategy_create(payload: dict = Body(...)) -> dict:
+        """保存一组作战参数为策略版本（可填 parent_id 记录调参血缘）。"""
+        from fastapi import Body, HTTPException
+
+        from libre_quant import store
+        from libre_quant.battle import norm_params
+
+        code = str(payload.get("code") or "")
+        name = str(payload.get("name") or "").strip()
+        params = norm_params(dict(payload.get("params") or {}))
+        if not code or not name:
+            raise HTTPException(400, "需要 code 和 name")
+        if not params.get("daily"):
+            raise HTTPException(400, "params.daily 必须大于 0（系统不替你发明金额）")
+        conn = store.connect()
+        try:
+            sid = store.strategy_save(
+                conn, code, name, params,
+                str(payload.get("note") or ""), payload.get("parent_id"))
+            return {"ok": True, "id": sid}
+        finally:
+            conn.close()
+
+    @app.delete("/api/strategies/{sid}")
+    def strategy_remove(sid: int) -> dict:
+        from libre_quant import store
+        conn = store.connect()
+        try:
+            store.strategy_delete(conn, sid)
+        finally:
+            conn.close()
+        return {"ok": True}
+
+    @app.post("/api/strategies/compare")
+    def strategies_compare(payload: dict = Body(...)) -> dict:
+        """多个策略版本同标的同口径对比（复盘页用）。"""
+        from fastapi import Body, HTTPException
+
+        from libre_quant import store
+        from libre_quant.workbench import run_history
+
+        ids = [int(i) for i in (payload.get("ids") or [])]
+        if not ids:
+            raise HTTPException(400, "需要 ids")
+        conn = store.connect()
+        try:
+            items = []
+            for sid in ids:
+                row = store.strategy_get(conn, sid)
+                if not row:
+                    continue
+                s = _strategy_json(row)
+                days, _raw, adj, _src = store.load_series(conn, s["code"])
+                if not days or not s["params"].get("daily"):
+                    items.append({**s, "backtest": None})
+                    continue
+                prem = store.load_premiums(conn, s["code"])
+                from libre_quant.config import get_settings
+                s_fee = get_settings()
+                p = s["params"]
+                h = run_history(days, adj, daily=p["daily"],
+                                dip_drop=p.get("dip_drop"),
+                                dip_mult=p.get("dip_mult") or 0.0,
+                                rise_gain=p.get("rise_gain"),
+                                sell_pct=p.get("sell_pct") or 0.0,
+                                premium_max=p.get("premium_max"), prem=prem,
+                                fee_rate=s_fee.trading_fee_rate,
+                                fee_min=s_fee.trading_fee_min)
+                step = max(1, len(h["curve"]) // 500)
+                s["backtest"] = {
+                    **{k: v for k, v in h.items()
+                       if k not in ("rows", "curve")},
+                    "curve": h["curve"][::step],
+                    "curve_days": [str(d) for d in days][::step]}
+                items.append(s)
+            return {"items": items}
         finally:
             conn.close()
 
