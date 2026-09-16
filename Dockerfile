@@ -11,7 +11,8 @@ RUN pnpm build
 FROM python:3.12-slim
 WORKDIR /app
 ENV TZ=Asia/Shanghai UV_CACHE_DIR=/tmp/uv-cache
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+# uv 固定版本：CI 构建可复现，避免 latest 漂移（本地 uv 同为 0.11.13）
+COPY --from=ghcr.io/astral-sh/uv:0.11.13 /uv /usr/local/bin/uv
 
 COPY pyproject.toml uv.lock README.md ./
 RUN uv sync --frozen --no-dev --no-install-project

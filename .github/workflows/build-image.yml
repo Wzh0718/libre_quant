@@ -1,0 +1,107 @@
+name: Build & Push Image (GHCR)
+
+# CI 只负责「打包」：测试门禁 → 构建 amd64/arm64 多架构镜像 → 推 GHCR。
+# 部署仍归 Komodo：拉 ghcr.io/wzh0718/libre_quant:latest 起单容器（8321），
+# DATABASE_URL / TAVILY_TOKEN 等由 Komodo 环境变量注入（见 .env.example）。
+#
+# 仓库私有 ⇒ GHCR package 默认私有，Komodo 侧需一个带 read:packages 的 PAT：
+#   docker login ghcr.io -u <github 用户名> -p <PAT>
+# 回滚：按 sha-<短SHA> tag 拉历史镜像（latest 跟随 master，sha tag 不可变）。
+
+on:
+  push:
+    branches: [master]
+    tags: ['v*']
+  workflow_dispatch:
+
+concurrency:
+  # 同一 ref 串行；不取消进行中的构建，避免 latest 被半途中断
+  group: image-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/wzh0718/libre_quant
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: 测试门禁
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.13"
+          python-version: "3.12"
+          enable-cache: true
+      - name: Install dependencies
+        run: uv sync --frozen
+      - name: Pytest
+        run: uv run --frozen pytest -q
+
+  image:
+    name: 构建并推送镜像
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up QEMU
+        # arm64 层在 amd64 runner 上经 QEMU 模拟构建，多架构发布必需
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,format=short,prefix=sha-
+            type=ref,event=tag
+          labels: |
+            org.opencontainers.image.title=libre_quant
+            org.opencontainers.image.description=个人量化研究看板（FastAPI + Vue3/ECharts，单容器单端口）
+
+      - name: Build and push (linux/amd64,linux/arm64)
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          # 不带 attestation：Komodo / 普通 docker pull 拉到的就是镜像本体
+          provenance: false
+
+      - name: Summary
+        run: |
+          {
+            echo "### 镜像已推送"
+            echo
+            echo '```'
+            echo "${{ steps.meta.outputs.tags }}"
+            echo "digest: ${{ steps.build.outputs.digest }}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
