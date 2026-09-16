@@ -25,7 +25,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 
 import requests
 
@@ -42,6 +42,12 @@ class NavPoint:
     nav_day: date
     nav: float
     acc_nav: float | None = None  # 累计净值
+
+
+#: 东财毫秒时间戳编码的是**北京时间**当日零点——必须固定 +08:00 解析，
+#: 用宿主本地时区会在非 +08 环境（UTC 开发机/CI）静默错一天，
+#: 进而让净值 lag 配对与溢价物化全错且无任何报错。
+_CST = timezone(timedelta(hours=8))
 
 
 class NavFormatError(ValueError):
@@ -67,14 +73,14 @@ def parse_pingzhong(text: str) -> list[NavPoint]:
     if m_acc:
         try:
             for ts, val in json.loads(m_acc.group(1)):
-                acc[datetime.fromtimestamp(_ms(ts)).date()] = float(val)
+                acc[datetime.fromtimestamp(_ms(ts), tz=_CST).date()] = float(val)
         except (TypeError, ValueError):
             acc = {}  # 累计净值坏了不致命，置空
 
     out: dict[date, NavPoint] = {}
     for r in rows:
         try:
-            d = datetime.fromtimestamp(_ms(r["x"])).date()
+            d = datetime.fromtimestamp(_ms(r["x"]), tz=_CST).date()
             out[d] = NavPoint(nav_day=d, nav=float(r["y"]), acc_nav=acc.get(d))
         except (KeyError, TypeError, ValueError):
             continue
