@@ -19,3 +19,7 @@ backtest-latest.txt
 web/
 frontend/node_modules/
 frontend/dist/
+
+# editor / agent state
+.idea/
+.lcm/
