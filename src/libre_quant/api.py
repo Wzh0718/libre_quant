@@ -944,15 +944,20 @@ def create_app(*, with_scheduler: bool = False) -> FastAPI:
         from fastapi import HTTPException
         from fastapi.responses import FileResponse
 
+        dist_root = DIST.resolve()
+
         @app.get("/{full_path:path}", include_in_schema=False)
         def spa(full_path: str):
-            """SPA 托管：存在的文件直出，其余路径回退 index.html（前端路由）。"""
+            """SPA 托管：存在的文件直出，其余路径回退 index.html（前端路由）。
+
+            安全：原始 ASGI 请求可携带未归一化的 ``..``（h11 不折叠），
+            必须 resolve 后做包含性校验，否则任意文件读。"""
             if full_path.startswith("api/"):
                 raise HTTPException(status_code=404)
-            f = DIST / full_path
-            if full_path and f.is_file():
+            f = (dist_root / full_path).resolve()
+            if full_path and f.is_relative_to(dist_root) and f.is_file():
                 return FileResponse(f)
-            return FileResponse(DIST / "index.html")
+            return FileResponse(dist_root / "index.html")
 
     return app
 
