@@ -94,16 +94,28 @@
     仓库含多阶段 `Dockerfile`（node 构建前端 → python 运行时），
     `DATABASE_URL` 由 Komodo 环境注入（单账号即可，管理员权限）。
     5432 不暴露公网，跨机器走 wireguard/tailscale 或 SSH 隧道。
-  - **镜像发布（2026-09-16 修订：CI 打包，Komodo 只拉取）**：
+  - **镜像发布（2026-09-17 落地：CI 打包 + Komodo 拉取式自动上线）**：
     `.github/workflows/build-image.yml` 在 push master / 打 `v*` tag / 手动
     dispatch 时先跑 pytest 门禁，再用 QEMU + Buildx 构建
     `linux/amd64,linux/arm64` 推 `ghcr.io/wzh0718/libre_quant`
     （tag：`latest` 跟随 master、`sha-<短SHA>` 不可变可回滚、git tag 原样转发；
-    缓存走 `type=gha`）。这样 Komodo 不再从源码重建，只 `docker pull` 镜像起容器，
-    `DATABASE_URL`/`TAVILY_TOKEN` 仍由 Komodo 环境变量注入。
-    仓库私有 ⇒ GHCR package 私有，Komodo 侧配一个带 `read:packages` 的 PAT
-    （`docker login ghcr.io -u <用户名> -p <PAT>`）。
-    本机无 buildx、Dockerfile 又是 node→python 两段式，故构建放 CI 一次成型。
+    缓存走 `type=gha`）。
+    **部署方向反过来做**（CI 不调 Komodo）：GitHub runner 的机房 IP 会被
+    komodo.librespaces.com 前面的 Cloudflare 下发 JS 挑战（`cf-mitigated:
+    challenge`），CI 调 API 必 403；且家服务器连不上 github.com，stack 走不了
+    git 源 —— 于是 compose 内容存在 Komodo（`file_contents`），stack `quant`
+    的 image 用 `pull_policy: always` 指 `:latest`，由 Komodo Procedure
+    「libre_quant auto deploy」（Cron `0 */5 * * * *`）执行 `DeployStack`：
+    digest 变了重建容器，没变是空操作（实测幂等）。
+    结果：`git push` → CI 出镜像 → 5 分钟内自动上线。
+    私有包拉取凭据挂在 Komodo 的 Docker Registry 账号 `ghcr.io / Wzh0718`。
+    要立刻上线可跑 `uv run python scripts/komodo_deploy.py`（本机 IP 不受 CF 挑战影响）。
+    ⚠️ 教训：**不要让 Komodo 自动更新它自己** —— 2026-09-17 实测，`komodo` stack
+    原本开着 `auto_update`，一次 `GlobalAutoUpdate` 触发自更新，日志为
+    `Komodo shutdown during execution`，Core 容器没起来、UI 502 约 15 分钟，
+    只能上主机 `docker compose up -d` 救回。现已关闭该 stack 的
+    `poll_for_updates`/`auto_update`，控制面更新保持手动；其余业务 stack
+    （axon/linkwarden/vaultwarden 等）的开关保持原样，全局调度仍是每天 03:00。
   - 安全：5432 **不暴露公网**，走 wireguard/tailscale 或 SSH 隧道。
   - 备份：`pg_dump` cron 即可（数据 <5 万行）。
   - 选型对比：原推荐 DuckDB 单文件的前提是"单机分析"，前提已不成立；

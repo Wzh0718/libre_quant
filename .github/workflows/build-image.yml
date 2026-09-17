@@ -1,12 +1,17 @@
 name: Build & Push Image (GHCR)
 
 # CI 只负责「打包」：测试门禁 → 构建 amd64/arm64 多架构镜像 → 推 GHCR。
-# 部署仍归 Komodo：拉 ghcr.io/wzh0718/libre_quant:latest 起单容器（8321），
-# DATABASE_URL / TAVILY_TOKEN 等由 Komodo 环境变量注入（见 .env.example）。
 #
-# 仓库私有 ⇒ GHCR package 默认私有，Komodo 侧需一个带 read:packages 的 PAT：
-#   docker login ghcr.io -u <github 用户名> -p <PAT>
-# 回滚：按 sha-<短SHA> tag 拉历史镜像（latest 跟随 master，sha tag 不可变）。
+# 部署在 Komodo 侧完成（CI 不碰 Komodo）：
+#   - GitHub runner 的机房 IP 会被 komodo.librespaces.com 前面的 Cloudflare 下发
+#     JS 挑战（cf-mitigated: challenge），CI 直接调 Komodo API 必然 403，所以
+#     部署做成「拉取式」：Komodo stack `quant`（Mini-Ubuntu）里 compose 用
+#     pull_policy: always 指向 ghcr.io/wzh0718/libre_quant:latest，
+#     由 Komodo Procedure「libre_quant auto deploy」（每 5 分钟）执行 DeployStack ——
+#     digest 变了就重建容器，没变则是空操作。
+#   - 所以 push master → 本工作流出镜像 → 5 分钟内自动上线，无需人工。
+#
+# 回滚：把 stack 里的 image 换成 ghcr.io/wzh0718/libre_quant:sha-<短SHA>（不可变 tag）。
 
 on:
   push:
@@ -123,68 +128,3 @@ jobs:
             echo "digest: ${{ steps.build.outputs.digest }}"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-
-  deploy:
-    name: 触发 Komodo 部署
-    # 只在 master 上自动上线；打 tag / 手动 dispatch 时也只走 master 分支的代码
-    needs: image
-    if: github.ref == 'refs/heads/master'
-    runs-on: ubuntu-latest
-    env:
-      KOMODO_URL: https://komodo.librespaces.com
-      # Komodo 里那个 stack 的 id（Mini-Ubuntu 上的自由量化看板）
-      KOMODO_STACK_ID: 6aab4422bfb6d8a625ac26ad
-      KOMODO_API_KEY: ${{ secrets.KOMODO_API_KEY }}
-      KOMODO_API_SECRET: ${{ secrets.KOMODO_API_SECRET }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-
-      - name: 诊断 Cloudflare 拦截（临时）
-        continue-on-error: true
-        run: |
-          for UA in "curl/8.5.0" "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"; do
-            echo "═══ UA: ${UA:0:60} ═══"
-            curl -sS -i --max-time 60 -X POST \
-              -H "x-api-key: $KOMODO_API_KEY" \
-              -H "x-api-secret: $KOMODO_API_SECRET" \
-              -H 'content-type: application/json' -A "$UA" \
-              -d '{}' "$KOMODO_URL/read/GetVersion" 2>&1 | head -25
-            echo
-          done
-
-      - name: 同步 compose 到 Komodo，并触发部署
-        # 家服务器连不上 github.com，所以 compose 内容存在 Komodo 里（file_contents），
-        # 每次从仓库同步过去，避免仓库与运行时漂移；随后 DeployStack 拉新 latest 镜像重启容器。
-        run: |
-          set -euo pipefail
-          api() {  # api <op> <json-body>
-            curl -sS --fail-with-body --max-time 300 -X POST \
-              -H "x-api-key: $KOMODO_API_KEY" \
-              -H "x-api-secret: $KOMODO_API_SECRET" \
-              -H 'content-type: application/json' \
-              -d "$2" "$KOMODO_URL/$1"
-          }
-
-          api read/GetStack "{\"stack\":\"$KOMODO_STACK_ID\"}" > stack.json
-          jq --rawfile compose docker-compose.yml \
-            '{id: ._id["$oid"], config: (.config | .file_contents = $compose)}' \
-            stack.json > update.json
-          api write/UpdateStack "$(cat update.json)" > /dev/null
-          echo "✅ compose 已同步到 Komodo stack $KOMODO_STACK_ID"
-
-          api execute/DeployStack "{\"stack\":\"$KOMODO_STACK_ID\"}" > /dev/null
-          echo "🚀 已触发 DeployStack，等待结果…"
-
-          for i in $(seq 1 60); do
-            sleep 10
-            UPD_ID=$(api read/ListUpdates '{}' \
-              | jq -r '[.updates[] | select(.operation == "DeployStack")][0].id')
-            UPD=$(api read/GetUpdate "{\"id\":\"$UPD_ID\"}")
-            STATE=$(jq -r '.status + " success=" + (.success | tostring)' <<<"$UPD")
-            echo "  [$((i * 10))s] $STATE"
-            [[ "$STATE" == Complete* ]] && break
-          done
-
-          jq -r '.logs[]? | "--- [\(.stage)] success=\(.success)\n\(.stdout // "")\n\(.stderr // "")"' <<<"$UPD"
-          [[ "$(jq -r '.success' <<<"$UPD")" == "true" ]] || { echo "::error::Komodo 部署未成功"; exit 1; }

@@ -113,20 +113,27 @@ cp .env.example .env   # 然后填写；.env 已进 .gitignore
 uv run python -m libre_quant.data.news "光模块 800G 最新进展"   # 需 TAVILY_TOKEN
 ```
 
-## 镜像与部署（CI 打包，Komodo 只拉取）
+## 镜像与部署（CI 打包 + Komodo 拉取式自动上线）
 
-本机没有 `docker buildx`，镜像统一在 GitHub Actions 里构建：
+本机没有 `docker buildx`，镜像统一在 GitHub Actions 里构建；部署是**拉取式**的——
+CI 不碰 Komodo（GitHub runner 的机房 IP 会被 komodo 前面的 Cloudflare 下发 JS 挑战，
+直接调 API 必然 403）：
 
 - `.github/workflows/build-image.yml`：push `master` / 打 `v*` tag / 手动 dispatch 触发
   → 先跑 pytest 门禁，再用 QEMU + Buildx 构建 `linux/amd64,linux/arm64` 推
   `ghcr.io/wzh0718/libre_quant`（tag：`latest` 跟随 master、`sha-<短SHA>` 不可变可回滚、
   git tag 原样转发）；CI 末尾按 digest 反查 manifest，缺任一平台即失败。
-  纯文档改动（`docs/**`、`**.md`）不触发重建。
-- Komodo：image 填 `ghcr.io/wzh0718/libre_quant:latest`，端口 8321，
-  环境变量注入 `DATABASE_URL`（必需）、`TAVILY_TOKEN` / `TRADING_FEE_*`（可选，见 `.env.example`）。
-- 仓库私有 ⇒ GHCR 包私有：Komodo 的 Registry 里需填一个带 `read:packages` 的 PAT
-  （用户名填 GitHub 用户名，密码填 PAT），等价于 `docker login ghcr.io -u <用户名> -p <PAT>`。
-- 回滚：把 image 换成 `ghcr.io/wzh0718/libre_quant:sha-<短SHA>` 重新部署。
+  纯文档 / compose 改动（`docs/**`、`**.md`、`docker-compose*.yml`、`.env.example`）不触发重建。
+- Komodo（Mini-Ubuntu）上的 stack `quant`：compose 内容存在 Komodo 里（`file_contents`，
+  因为家服务器连不上 github.com，走不了 git 源），image 指 `ghcr.io/wzh0718/libre_quant:latest`，
+  端口 8321，环境变量 `DATABASE_URL`（必需）+ `TAVILY_TOKEN` / `TRADING_FEE_*`（可选）；
+  私有包的拉取凭据是 Komodo 里的 Docker Registry 账号 `ghcr.io / Wzh0718`。
+- 上线：Komodo Procedure「libre_quant auto deploy」（每 5 分钟）执行 `DeployStack` ——
+  compose 里 `pull_policy: always`，digest 变了就重建容器，没变是空操作。
+  所以 **push master → CI 出镜像 → 5 分钟内自动上线**，无需人工。
+- 要立刻上线（不等那 5 分钟）：`uv run python scripts/komodo_deploy.py`
+  （顺手把仓库 compose 同步进 stack；凭据放 `.komodo.local`，已 git 忽略）。
+- 回滚：把 stack 里的 image 换成 `ghcr.io/wzh0718/libre_quant:sha-<短SHA>` 再部署。
 
 ## 项目结构
 
