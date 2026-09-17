@@ -1,0 +1,81 @@
+# libre_quant 单容器部署：FastAPI 看板 + 内嵌 APScheduler，单端口 8321。
+#
+# 镜像由 GitHub Actions 构建推 GHCR（.github/workflows/build-image.yml）：
+#   docker login ghcr.io -u <github 用户名> -p <带 read:packages 的 PAT>   # 私有包，一次性
+#   docker compose pull && docker compose up -d
+#
+# 环境变量：compose 会自动读取同目录的 .env（模板见 .env.example）；
+# Komodo 部署时把同样的变量注入 stack 即可，两种形态通用。
+#
+# 容器无状态：数据全在 PostgreSQL，故不挂任何卷。
+
+# 固定项目名（容器/网络命名与所在目录无关）
+name: libre_quant
+
+services:
+  app:
+    image: ghcr.io/wzh0718/libre_quant:latest
+    # 回滚到历史版本：换成 ghcr.io/wzh0718/libre_quant:sha-<短SHA>（不可变 tag）
+    container_name: libre_quant
+    restart: unless-stopped
+    # 每次 up 都拉一次 latest —— CI 推新镜像后 up -d 即完成更新
+    pull_policy: always
+    ports:
+      - "8321:8321"
+    extra_hosts:
+      # 家服务器 PG 是宿主原生安装（5432 不出公网）：容器内经这个别名连宿主
+      - "host.docker.internal:host-gateway"
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?请先在 .env 或宿主机环境变量里提供 DATABASE_URL}
+      TAVILY_TOKEN: ${TAVILY_TOKEN:-}
+      TRADING_FEE_RATE: ${TRADING_FEE_RATE:-0.00005}
+      TRADING_FEE_MIN: ${TRADING_FEE_MIN:-0.1}
+    healthcheck:
+      # slim 镜像没有 curl/wget，直接用自带 python 打 /api/health
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8321/api/health', timeout=5)
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+# ── 变体（按需启用其中之一）─────────────────────────────────────────────────
+#
+# 1) PG 也在 docker 里（而不是宿主原生安装）：加一个 db 服务同网部署，
+#    DATABASE_URL 主机名写 db：
+#
+#   services:
+#     db:
+#       image: postgres:18
+#       restart: unless-stopped
+#       environment:
+#         POSTGRES_USER: libre_quant
+#         POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
+#         POSTGRES_DB: libre_quant
+#       volumes:
+#         - pgdata:/var/lib/postgresql/data
+#       healthcheck:
+#         test: ["CMD-SHELL", "pg_isready -U libre_quant"]
+#         interval: 10s
+#         retries: 5
+#     app:
+#       depends_on:
+#         db:
+#           condition: service_healthy
+#   volumes:
+#     pgdata:
+#
+# 2) PG 在另一台机器（Tailscale/wireguard 网段）：删掉 extra_hosts，
+#    DATABASE_URL 直接写对端地址，例如
+#    postgresql://libre_quant:***@100.x.y.z:5432/libre_quant
+#
+# 3) 不想做端口映射、让容器直接用宿主网络栈：把 ports 换成 network_mode: host，
+#    DATABASE_URL 即可写 127.0.0.1:5432。

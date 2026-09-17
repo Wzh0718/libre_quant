@@ -12,12 +12,14 @@ on:
   push:
     branches: [master]
     tags: ['v*']
-    # 纯文档改动不触发重建（docs/ 本就在 .dockerignore 里，进不了镜像；
+    # 纯文档/部署清单改动不触发重建（docs/ 与 compose 都进不了镜像；
     # README 只在镜像里当说明文件，无运行影响）。
     # 注：路径过滤对 tag push 与手动 dispatch 不生效，发版不受影响。
     paths-ignore:
       - 'docs/**'
       - '**.md'
+      - 'docker-compose*.yml'
+      - '.env.example'
   workflow_dispatch:
 
 concurrency:
