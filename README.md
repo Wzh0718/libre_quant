@@ -128,12 +128,18 @@ CI 不碰 Komodo（GitHub runner 的机房 IP 会被 komodo 前面的 Cloudflare
   因为家服务器连不上 github.com，走不了 git 源），image 指 `ghcr.io/wzh0718/libre_quant:latest`，
   端口 8321，环境变量 `DATABASE_URL`（必需）+ `TAVILY_TOKEN` / `TRADING_FEE_*`（可选）；
   私有包的拉取凭据是 Komodo 里的 Docker Registry 账号 `ghcr.io / Wzh0718`。
-- 上线：Komodo Procedure「libre_quant auto deploy」（每 5 分钟）执行 `DeployStack` ——
-  compose 里 `pull_policy: always`，digest 变了就重建容器，没变是空操作。
-  所以 **push master → CI 出镜像 → 5 分钟内自动上线**，无需人工。
-- 要立刻上线（不等那 5 分钟）：`uv run python scripts/komodo_deploy.py`
-  （顺手把仓库 compose 同步进 stack；凭据放 `.komodo.local`，已 git 忽略）。
+- 上线：Komodo 的 **Global Auto Update** 调度（Cron `0 */30 * * * *`）会检查所有开了
+  `auto_update` 的 stack；`quant` 开了该开关（并挂了 registry 账号），所以 digest 一变
+  就会在 Compose Up 阶段 `Container Recreate`。
+  所以 **push master → CI 出镜像 → ≤30 分钟自动上线**，无需人工。
+  ⚠️ 只有这条路径吃 digest：普通 `DeployStack` / `DeployStackIfChanged` 比的是服务
+  配置哈希，`:latest` 的 digest 变了它们不会重建容器（实测）。
+- 要立刻上线（不等那 30 分钟）：`uv run python scripts/komodo_deploy.py`
+  （触发一次 `GlobalAutoUpdate`，顺带把仓库 compose 同步进 stack；凭据放
+  `.komodo.local`，已 git 忽略）。
 - 回滚：把 stack 里的 image 换成 `ghcr.io/wzh0718/libre_quant:sha-<短SHA>` 再部署。
+- 不要给 Komodo 自己的 stack 开 `auto_update`：自更新会以
+  `Komodo shutdown during execution` 收场，UI 502（2026-09-17 踩过）。
 
 ## 项目结构
 

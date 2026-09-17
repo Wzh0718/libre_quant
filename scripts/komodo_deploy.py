@@ -1,15 +1,22 @@
 #!/usr/bin/env python3
-"""手动触发 Komodo 部署（本机执行，不走 GitHub runner）。
+"""手动触发一次 Komodo 全局自动更新（= 立刻把 libre_quant 上线）。
 
 为什么需要它：komodo.librespaces.com 前面挂着 Cloudflare，机房 IP（GitHub runner）
-会被下发 JS 挑战，CI 调不动 Komodo API；所以正常路径是「CI 出镜像 → Komodo 侧
-Procedure 每 5 分钟拉 latest 自动重建」。这个脚本是**立刻上线**的快捷方式，
-顺便把仓库里的 docker-compose.yml 同步进 stack（避免两边漂移）。
+会被下发 JS 挑战，CI 调不动 Komodo API —— 正常路径是「CI 出镜像 → Komodo 每 30 分钟
+的 Global Auto Update 自动拉取重建」。这个脚本就是**不等那 30 分钟**的快捷方式。
+
+机制说明（踩过的坑）：
+  - 普通 `DeployStack` / `DeployStackIfChanged` **不会**因为 `:latest` 的 digest 变了
+    而重建容器（Compose 比的是服务配置哈希，不是镜像 digest）；
+  - 只有 `GlobalAutoUpdate` 这条路径是 digest 感知的，它会在 Compose Up 阶段
+    做 `Container Recreate`；
+  - 副作用：它会顺带检查你其它开了 auto_update 的 stack（它们本来也会在
+    下一个 30 分钟刻度被检查，所以影响很小）。
 
 用法::
 
-    uv run python scripts/komodo_deploy.py             # 同步 compose + 部署 + 等结果
-    uv run python scripts/komodo_deploy.py --no-sync   # 只部署，不同步 compose
+    uv run python scripts/komodo_deploy.py             # 同步 compose + 触发 + 等结果
+    uv run python scripts/komodo_deploy.py --no-sync   # 不同步 compose
 
 凭据：仓库根目录 `.komodo.local`（已 git 忽略），三行：
 
@@ -17,8 +24,10 @@ Procedure 每 5 分钟拉 latest 自动重建」。这个脚本是**立刻上线
     KOMODO_API_KEY=K_...
     KOMODO_API_SECRET=S_...
 
-注意：Komodo API 是根路径上的 RPC 风格（POST /read/GetStack、/execute/DeployStack），
+注意：Komodo API 是根路径上的 RPC 风格（POST /read/GetStack、/execute/GlobalAutoUpdate），
 且 Cloudflare 会拦 python-urllib 的 UA，所以这里显式伪装成 curl 的 UA。
+另外 Komodo 的 update 日志会把 stack 环境变量明文打出来（含数据库密码），
+本脚本默认过滤掉这些阶段，不回显。
 """
 
 from __future__ import annotations
@@ -34,6 +43,10 @@ ROOT = Path(__file__).resolve().parents[1]
 STACK_ID = "6aab4422bfb6d8a625ac26ad"  # Komodo 里名为 quant 的 stack
 CREDS = ROOT / ".komodo.local"
 COMPOSE = ROOT / "docker-compose.yml"
+CONTAINER = "libre_quant"
+
+# 这些阶段的输出含明文密钥（DATABASE_URL / TAVILY_TOKEN），不打印
+SECRET_STAGES = {"Write Environment File", "Compose Config"}
 
 
 def load_creds() -> tuple[str, str, str]:
@@ -70,12 +83,25 @@ class Komodo:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return json.loads(r.read().decode())
 
+    def container(self) -> dict:
+        servers = self.api("read/ListServers") or []
+        sid = next((s["id"] for s in servers if "Mini" in str(s.get("name"))), servers[0]["id"])
+        for c in self.api("read/ListDockerContainers", {"server": sid}) or []:
+            if c.get("name") == CONTAINER:
+                return c
+        return {}
+
+    def container_key(self) -> str:
+        """只取能反映「容器有没有被重建」的字段（status 里带 Up X minutes，不能用）。"""
+        c = self.container()
+        return f"{c.get('created')}|{c.get('image_id')}"
+
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--stack-id", default=STACK_ID)
     ap.add_argument("--no-sync", action="store_true", help="不把仓库 compose 同步进 stack")
-    ap.add_argument("--timeout", type=int, default=600, help="等待部署完成的秒数")
+    ap.add_argument("--timeout", type=int, default=900, help="等待完成的秒数")
     args = ap.parse_args(argv)
 
     url, key, secret = load_creds()
@@ -92,56 +118,47 @@ def main(argv=None) -> int:
             k.api("write/UpdateStack", {"id": args.stack_id, "config": cfg})
             print(f"compose 已同步到 stack（{len(want)} 字节）")
 
-    before = {c["name"]: c.get("created") for c in _containers(k)}
-    print("触发 DeployStack …")
-    k.api("execute/DeployStack", {"stack": args.stack_id})
+    before = k.container_key()
+    print("触发 GlobalAutoUpdate（digest 变了才会重建容器）…")
+    resp = k.api("execute/GlobalAutoUpdate", {})
+    if isinstance(resp, dict) and resp.get("error"):
+        print(f"没能触发：{resp['error']}")
+        print("（多半是上一次全局检查还在跑；等一两分钟再试，或直接等调度）")
+        return 2
 
-    upd_id = None
     deadline = time.time() + args.timeout
+    upd = None
     while time.time() < deadline:
         time.sleep(8)
         ups = k.api("read/ListUpdates", {}).get("updates", [])
-        cand = next((u for u in ups if u["operation"] == "DeployStack"
-                     and (u.get("target") or {}).get("id") == args.stack_id), None)
+        cand = next((u for u in ups if u["operation"] == "GlobalAutoUpdate"), None)
         if not cand:
             continue
-        upd_id = cand["id"]
-        u = k.api("read/GetUpdate", {"id": upd_id})
-        if u.get("status") == "Complete":
-            print(f"部署{'成功' if u.get('success') else '失败'}")
-            for log in u.get("logs") or []:
-                out = (log.get("stdout") or "").strip()
-                err = (log.get("stderr") or "").strip()
-                if out or err:
-                    print(f"--- [{log.get('stage')}]")
-                    if out:
-                        print(out)
-                    if err:
-                        print("STDERR:", err)
-            if not u.get("success"):
-                return 1
+        upd = k.api("read/GetUpdate", {"id": cand["id"]})
+        if upd.get("status") == "Complete":
             break
-    else:
-        print("超时：部署仍在执行，去 Komodo UI 看进度")
+
+    if not upd or upd.get("status") != "Complete":
+        print("超时：自动更新仍在执行，去 Komodo UI 看进度")
         return 1
 
-    after = {c["name"]: c.get("created") for c in _containers(k)}
-    if before.get("libre_quant") == after.get("libre_quant"):
-        print("容器未重建（镜像 digest 未变）—— 已是最新")
+    ok = upd.get("success")
+    print(f"GlobalAutoUpdate 完成：success={ok}")
+    for log in upd.get("logs") or []:
+        stage = log.get("stage")
+        if stage in SECRET_STAGES:
+            print(f"--- [{stage}] （含密钥，已省略）")
+            continue
+        out = ((log.get("stdout") or "") + (log.get("stderr") or "")).strip()
+        if out:
+            print(f"--- [{stage}]\n{out[:2000]}")
+
+    after_c = k.container()
+    if k.container_key() == before:
+        print(f"\n容器未重建 —— 镜像 digest 未变（当前 image_id={str(after_c.get('image_id'))[:20]}）")
     else:
-        print("容器已重建，新镜像生效")
+        print(f"\n✅ 容器已重建，新镜像生效（{after_c.get('status')}）")
     return 0
-
-
-def _containers(k: Komodo) -> list[dict]:
-    """拿 Mini-Ubuntu 上的容器列表（只看名字/created 做前后对比）。"""
-    servers = k.api("read/ListServers", {})
-    if isinstance(servers, list) and servers:
-        sid = next((s["id"] for s in servers if "Mini" in str(s.get("name"))), servers[0]["id"])
-        got = k.api("read/ListDockerContainers", {"server": sid})
-        if isinstance(got, list):
-            return got
-    return []
 
 
 if __name__ == "__main__":

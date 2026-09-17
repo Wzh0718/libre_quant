@@ -104,18 +104,22 @@
     komodo.librespaces.com 前面的 Cloudflare 下发 JS 挑战（`cf-mitigated:
     challenge`），CI 调 API 必 403；且家服务器连不上 github.com，stack 走不了
     git 源 —— 于是 compose 内容存在 Komodo（`file_contents`），stack `quant`
-    的 image 用 `pull_policy: always` 指 `:latest`，由 Komodo Procedure
-    「libre_quant auto deploy」（Cron `0 */5 * * * *`）执行 `DeployStack`：
-    digest 变了重建容器，没变是空操作（实测幂等）。
-    结果：`git push` → CI 出镜像 → 5 分钟内自动上线。
-    私有包拉取凭据挂在 Komodo 的 Docker Registry 账号 `ghcr.io / Wzh0718`。
-    要立刻上线可跑 `uv run python scripts/komodo_deploy.py`（本机 IP 不受 CF 挑战影响）。
-    ⚠️ 教训：**不要让 Komodo 自动更新它自己** —— 2026-09-17 实测，`komodo` stack
-    原本开着 `auto_update`，一次 `GlobalAutoUpdate` 触发自更新，日志为
-    `Komodo shutdown during execution`，Core 容器没起来、UI 502 约 15 分钟，
-    只能上主机 `docker compose up -d` 救回。现已关闭该 stack 的
-    `poll_for_updates`/`auto_update`，控制面更新保持手动；其余业务 stack
-    （axon/linkwarden/vaultwarden 等）的开关保持原样，全局调度仍是每天 03:00。
+    的 image 用 `pull_policy: always` 指 `:latest`，并开 `auto_update` +
+    挂 Docker Registry 账号 `ghcr.io / Wzh0718`，由 Komodo 的
+    **Global Auto Update** 调度（Cron `0 */30 * * * *`）检查 digest：
+    变了就在 Compose Up 阶段 `Container Recreate`。
+    结果：`git push` → CI 出镜像 → **≤30 分钟自动上线**（2026-09-17 实测：
+    10:30 调度 → 10:31 容器换成 CI 新 digest，health 正常）。
+    要立刻上线可跑 `uv run python scripts/komodo_deploy.py`（本机 IP 不受 CF
+    挑战影响；它触发同一条 `GlobalAutoUpdate` 路径）。
+    ⚠️ 坑一：**只有 `GlobalAutoUpdate` 吃 digest** —— 普通 `DeployStack` /
+    `DeployStackIfChanged` 比的是服务配置哈希，`:latest` digest 变了也不重建
+    容器（两者都实测过）。坑二：**别让 Komodo 自动更新它自己** —— 2026-09-17
+    实测，`komodo` stack 原本开着 `auto_update`，一次 `GlobalAutoUpdate` 触发
+    自更新，日志为 `Komodo shutdown during execution`，Core 容器没起来、
+    UI 502 约 15 分钟，只能上主机 `docker compose up -d` 救回。现已关闭该
+    stack 的 `poll_for_updates`/`auto_update`，控制面更新保持手动；其余业务
+    stack（axon/linkwarden/vaultwarden 等）的开关保持原样。
   - 安全：5432 **不暴露公网**，走 wireguard/tailscale 或 SSH 隧道。
   - 备份：`pg_dump` cron 即可（数据 <5 万行）。
   - 选型对比：原推荐 DuckDB 单文件的前提是"单机分析"，前提已不成立；
