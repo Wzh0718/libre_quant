@@ -140,6 +140,19 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
+      - name: 诊断 Cloudflare 拦截（临时）
+        continue-on-error: true
+        run: |
+          for UA in "curl/8.5.0" "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"; do
+            echo "═══ UA: ${UA:0:60} ═══"
+            curl -sS -i --max-time 60 -X POST \
+              -H "x-api-key: $KOMODO_API_KEY" \
+              -H "x-api-secret: $KOMODO_API_SECRET" \
+              -H 'content-type: application/json' -A "$UA" \
+              -d '{}' "$KOMODO_URL/read/GetVersion" 2>&1 | head -25
+            echo
+          done
+
       - name: 同步 compose 到 Komodo，并触发部署
         # 家服务器连不上 github.com，所以 compose 内容存在 Komodo 里（file_contents），
         # 每次从仓库同步过去，避免仓库与运行时漂移；随后 DeployStack 拉新 latest 镜像重启容器。
