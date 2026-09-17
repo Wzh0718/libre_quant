@@ -123,3 +123,55 @@ jobs:
             echo "digest: ${{ steps.build.outputs.digest }}"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+
+  deploy:
+    name: 触发 Komodo 部署
+    # 只在 master 上自动上线；打 tag / 手动 dispatch 时也只走 master 分支的代码
+    needs: image
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    env:
+      KOMODO_URL: https://komodo.librespaces.com
+      # Komodo 里那个 stack 的 id（Mini-Ubuntu 上的自由量化看板）
+      KOMODO_STACK_ID: 6aab4422bfb6d8a625ac26ad
+      KOMODO_API_KEY: ${{ secrets.KOMODO_API_KEY }}
+      KOMODO_API_SECRET: ${{ secrets.KOMODO_API_SECRET }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: 同步 compose 到 Komodo，并触发部署
+        # 家服务器连不上 github.com，所以 compose 内容存在 Komodo 里（file_contents），
+        # 每次从仓库同步过去，避免仓库与运行时漂移；随后 DeployStack 拉新 latest 镜像重启容器。
+        run: |
+          set -euo pipefail
+          api() {  # api <op> <json-body>
+            curl -sS --fail-with-body --max-time 300 -X POST \
+              -H "x-api-key: $KOMODO_API_KEY" \
+              -H "x-api-secret: $KOMODO_API_SECRET" \
+              -H 'content-type: application/json' \
+              -d "$2" "$KOMODO_URL/$1"
+          }
+
+          api read/GetStack "{\"stack\":\"$KOMODO_STACK_ID\"}" > stack.json
+          jq --rawfile compose docker-compose.yml \
+            '{id: ._id["$oid"], config: (.config | .file_contents = $compose)}' \
+            stack.json > update.json
+          api write/UpdateStack "$(cat update.json)" > /dev/null
+          echo "✅ compose 已同步到 Komodo stack $KOMODO_STACK_ID"
+
+          api execute/DeployStack "{\"stack\":\"$KOMODO_STACK_ID\"}" > /dev/null
+          echo "🚀 已触发 DeployStack，等待结果…"
+
+          for i in $(seq 1 60); do
+            sleep 10
+            UPD_ID=$(api read/ListUpdates '{}' \
+              | jq -r '[.updates[] | select(.operation == "DeployStack")][0].id')
+            UPD=$(api read/GetUpdate "{\"id\":\"$UPD_ID\"}")
+            STATE=$(jq -r '.status + " success=" + (.success | tostring)' <<<"$UPD")
+            echo "  [$((i * 10))s] $STATE"
+            [[ "$STATE" == Complete* ]] && break
+          done
+
+          jq -r '.logs[]? | "--- [\(.stage)] success=\(.success)\n\(.stdout // "")\n\(.stderr // "")"' <<<"$UPD"
+          [[ "$(jq -r '.success' <<<"$UPD")" == "true" ]] || { echo "::error::Komodo 部署未成功"; exit 1; }
